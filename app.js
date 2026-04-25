@@ -144,25 +144,48 @@ function cloneFixedExpenses(sourceMonth) {
   }));
 }
 
+function hasMeaningfulFixedExpenses(month) {
+  const fixed = month?.gastosFijos || [];
+  return fixed.some((g) => String(g?.nombre || '').trim() || Number(g?.monto || 0) !== 0);
+}
+
+function isPlaceholderMonth(month) {
+  if (!month) return true;
+  const movimientos = Array.isArray(month.movimientos) ? month.movimientos : [];
+  const fixed = Array.isArray(month.gastosFijos) ? month.gastosFijos : [];
+  return movimientos.length === 0 && fixed.length > 0 && fixed.every((g) => Number(g?.monto || 0) === 0 && !g?.pagado);
+}
+
 function findBestMonthTemplate(sourceMonthKey = state.currentMonth) {
   const preferred = state.months[sourceMonthKey];
-  if (preferred && Array.isArray(preferred.gastosFijos) && preferred.gastosFijos.length) return preferred;
+  if (hasMeaningfulFixedExpenses(preferred)) return preferred;
 
   const allMonths = Object.entries(state.months || {})
     .sort((a, b) => a[0].localeCompare(b[0]))
     .reverse()
     .map(([, value]) => value);
 
-  const withFixed = allMonths.find((m) => Array.isArray(m?.gastosFijos) && m.gastosFijos.length);
-  return withFixed || baseMonth();
+  const withFixed = allMonths.find((m) => hasMeaningfulFixedExpenses(m));
+  return withFixed || preferred || baseMonth();
 }
 
 function ensureMonth(monthKey, sourceMonthKey = state.currentMonth) {
-  if (!state.months[monthKey]) {
-    const source = findBestMonthTemplate(sourceMonthKey);
+  const source = findBestMonthTemplate(sourceMonthKey);
+  const existing = state.months[monthKey];
+
+  if (!existing) {
     state.months[monthKey] = {
       gastosFijos: cloneFixedExpenses(source),
       movimientos: [],
+    };
+    return;
+  }
+
+  if (isPlaceholderMonth(existing) && hasMeaningfulFixedExpenses(source)) {
+    state.months[monthKey] = {
+      ...existing,
+      gastosFijos: cloneFixedExpenses(source),
+      movimientos: Array.isArray(existing.movimientos) ? existing.movimientos : [],
     };
   }
 }
