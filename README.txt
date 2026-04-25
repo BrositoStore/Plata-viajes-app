@@ -79,3 +79,9 @@ Siguiente mejora recomendable
 - versión con sincronización en la nube y usuarios
 - edición visual más cómoda
 - agrupación todavía más fina por cliente y por pedido
+
+
+Versión v4:
+- En cada cliente del viaje ya no se elige solo 'Pagado' o 'Debe'.
+- Ahora podés cargar directamente un pago parcial inicial en el campo 'Pago parcial / cobrado ahora'.
+- El sistema calcula solo cobrado, pendiente y estado.

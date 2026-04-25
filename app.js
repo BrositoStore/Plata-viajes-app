@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v3';
+const STORAGE_KEY = 'plata-viajes-pwa-v4';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -754,14 +754,14 @@ function addTripLineFromForm(ev) {
   const section = ev.target.dataset.section;
   const fd = new FormData(ev.target);
   const cobro = Number(fd.get('cobro') || 0);
-  const pagado = fd.get('pagado') === 'si';
+  const cobradoInicial = Math.max(0, Math.min(Number(fd.get('cobradoInicial') || 0), cobro));
   const item = normalizeTripLine({
     id: uid(),
     cliente: String(fd.get('cliente') || '').trim(),
     detalle: String(fd.get('detalle') || '').trim(),
     cobro,
-    cobradoActual: pagado ? cobro : 0,
-    pagos: pagado && cobro > 0 ? [{ id: uid(), fecha: today(), monto: cobro, texto: 'Pago inicial completo' }] : [],
+    cobradoActual: cobradoInicial,
+    pagos: cobradoInicial > 0 ? [{ id: uid(), fecha: today(), monto: cobradoInicial, texto: cobradoInicial >= cobro ? 'Pago inicial completo' : 'Pago inicial parcial' }] : [],
   });
   if (!item.cliente && !item.detalle) return;
   currentTrip()[section].unshift(item);
