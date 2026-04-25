@@ -105,3 +105,16 @@ Versión v12:
 - Nuevo mes copia SIEMPRE desde el mes actual inmediato anterior.
 - Reparar mes rehace los gastos fijos del mes actual tomando como base el mes anterior.
 - Meses bugueados viejos sin movimientos y con gastos fijos raros se corrigen solos al abrirlos.
+
+
+Versión v14
+- tablero Inicio
+- auditoría
+- cierre mensual
+- autosnapshots
+- exportar CSV
+- duplicar último viaje
+- alertas y validaciones
+- fichas de cliente más completas
+- deudores reforzados
+- accesos rápidos y mejoras de uso móvil

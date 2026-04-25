@@ -25,8 +25,11 @@
           <input id="monthPicker" type="month" />
         </label>
         <button id="nextMonthBtn" class="secondary">Nuevo mes</button>
+        <button id="closeMonthBtn" class="secondary">Cerrar mes</button>
         <button id="repairMonthBtn" class="secondary">Reparar mes desde anterior</button>
         <button id="backupBtn" class="secondary">Backup</button>
+        <button id="csvBtn" class="secondary">Exportar CSV</button>
+        <button id="restoreSnapshotBtn" class="secondary">Restaurar auto</button>
         <label class="secondary fake-file">
           Importar
           <input id="importInput" type="file" accept="application/json" hidden />
@@ -36,13 +39,61 @@
 
     <section id="globalStats" class="stats-grid"></section>
 
-    <nav class="tabs">
-      <button class="tab active" data-tab="plata">Plata</button>
+    <nav class="tabs tabs-3">
+      <button class="tab active" data-tab="inicio">Inicio</button>
+      <button class="tab" data-tab="plata">Plata</button>
       <button class="tab" data-tab="viajes">Viajes</button>
     </nav>
 
     <main>
-      <section id="tab-plata" class="tab-panel active">
+      <section id="tab-inicio" class="tab-panel active">
+        <div class="card">
+          <div class="card-head"><h2>Tablero general</h2><span id="backupBadge" class="pill">Sin backup</span></div>
+          <div class="card-body">
+            <div id="dashboardOverview" class="stats-grid compact"></div>
+            <div class="grid-2">
+              <div class="card inner">
+                <div class="card-head"><h3>Alertas y validaciones</h3></div>
+                <div class="card-body"><div id="dashboardAlerts" class="stack"></div></div>
+              </div>
+              <div class="card inner">
+                <div class="card-head"><h3>Accesos rápidos</h3></div>
+                <div class="card-body">
+                  <div class="quick-actions">
+                    <button id="duplicateLastTripBtn" class="secondary">Duplicar último viaje</button>
+                    <button id="quickFuelBtn" class="secondary">Combustible rápido</button>
+                    <button id="quickTollBtn" class="secondary">Peaje rápido</button>
+                    <button id="quickGarageBtn" class="secondary">Cochera rápida</button>
+                    <button id="copyMonthSummaryDashboardBtn" class="secondary">Copiar resumen mes</button>
+                  </div>
+                  <div id="dashboardTripInfo" class="stack top-gap"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>Cierres mensuales</h2></div>
+            <div class="card-body"><div id="monthClosuresList" class="stack"></div></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Auditoría reciente</h2></div>
+            <div class="card-body"><div id="auditLogList" class="stack"></div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Autosnapshots</h2></div>
+          <div class="card-body">
+            <div class="subtle small-bottom">La app guarda copias automáticas locales. Podés restaurar la última desde arriba.</div>
+            <div id="snapshotsList" class="stack"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-plata" class="tab-panel">
         <div class="card">
           <div class="card-head">
             <h2>Gastos fijos del mes</h2>
@@ -202,6 +253,7 @@
                 </div>
 
                 <div id="expenseCategoriesList" class="chips"></div>
+                <div id="quickExpenseTemplates" class="chips quick-templates"></div>
                 <div id="tripExpensesList" class="list"></div>
               </div>
             </div>
@@ -225,7 +277,10 @@
               </div>
             </div>
 
-            <button id="closeTripBtn">Cerrar viaje y pasar deudores pendientes</button>
+            <div class="sticky-actions">
+              <button id="copyTripSummaryBtnBottom" class="secondary">Copiar resumen</button>
+              <button id="closeTripBtn">Cerrar viaje y pasar deudores pendientes</button>
+            </div>
           </div>
         </div>
 

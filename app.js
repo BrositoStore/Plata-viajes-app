@@ -1,5 +1,6 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v13';
-const STORAGE_KEYS = ['plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
+const STORAGE_KEY = 'plata-viajes-pwa-v14';
+const STORAGE_KEYS = ['plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
+const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v14';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -88,6 +89,9 @@ const initialState = () => {
     tripExpenseCategories: ['Combustible', 'Peajes', 'Comida', 'Cadetería', 'Cochera', 'Repuestos', 'Otros'],
     clientesFrecuentes: [],
     deudores: [],
+    auditLog: [],
+    monthClosures: [],
+    lastBackupAt: '',
     viajeActual: emptyTrip(),
     historialViajes: [],
   };
@@ -117,9 +121,177 @@ function migrateState(parsed) {
   if (!parsed.clientesFrecuentes) parsed.clientesFrecuentes = [];
   if (!parsed.deudores) parsed.deudores = [];
   if (!parsed.compromisos) parsed.compromisos = [];
+  if (!parsed.auditLog) parsed.auditLog = [];
+  if (!parsed.monthClosures) parsed.monthClosures = [];
+  if (!parsed.lastBackupAt) parsed.lastBackupAt = '';
   parsed.viajeActual = migrateTripToUnifiedPedidos(parsed.viajeActual || emptyTrip());
   parsed.historialViajes = (parsed.historialViajes || []).map((t) => migrateTripToUnifiedPedidos(t));
   return parsed;
+}
+
+function loadSnapshots() {
+  try {
+    return JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function saveSnapshot(label = 'Auto') {
+  try {
+    const snapshots = loadSnapshots();
+    const serialized = JSON.stringify(state);
+    if (snapshots[0] && snapshots[0].data === serialized) return;
+    snapshots.unshift({ id: uid(), at: new Date().toISOString(), label, data: serialized });
+    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots.slice(0, 8)));
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function restoreLatestSnapshot() {
+  const snapshots = loadSnapshots();
+  if (!snapshots.length) return alert('No hay autosnapshots guardados.');
+  if (!confirm(`Restaurar snapshot de ${snapshots[0].at}?`)) return;
+  try {
+    state = migrateState(JSON.parse(snapshots[0].data));
+    repairMonthChainFromPrevious();
+    normalizeTrip(state.viajeActual);
+    (state.historialViajes || []).forEach(normalizeTrip);
+    logAction('snapshot', 'Se restauró el último autosnapshot');
+    render();
+  } catch {
+    alert('No se pudo restaurar el autosnapshot.');
+  }
+}
+
+function logAction(type, text) {
+  if (!state.auditLog) state.auditLog = [];
+  state.auditLog.unshift({ id: uid(), at: new Date().toISOString(), type, text });
+  state.auditLog = state.auditLog.slice(0, 120);
+}
+
+function daysBetween(dateStr) {
+  if (!dateStr) return 0;
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return 0;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+}
+
+function collectDashboardAlerts() {
+  const alerts = [];
+  const month = currentMonthData();
+  const trip = currentTrip();
+  const tripMetrics = getTripMetrics(trip);
+  const fixedZero = (month.gastosFijos || []).filter((g) => Number(g.monto || 0) === 0 && String(g.nombre || '').trim());
+  if (fixedZero.length) alerts.push({ level: 'warning', text: `Hay ${fixedZero.length} gastos fijos con monto 0.` });
+  if (tripMetrics.totalPendiente > 0) alerts.push({ level: 'info', text: `El viaje actual tiene ${money(tripMetrics.totalPendiente)} pendientes.` });
+  const debtors = (state.deudores || []);
+  const oldDebtors = debtors.filter((d) => daysBetween(d.fechaOrigen || d.ultimoViaje) >= 30);
+  if (oldDebtors.length) alerts.push({ level: 'warning', text: `Hay ${oldDebtors.length} deudores con más de 30 días.` });
+  if (!state.lastBackupAt) alerts.push({ level: 'warning', text: 'Todavía no hiciste un backup manual.' });
+  else if (daysBetween(state.lastBackupAt) >= 7) alerts.push({ level: 'warning', text: `Último backup manual hace ${daysBetween(state.lastBackupAt)} días.` });
+  if (!(state.historialViajes || []).some((v) => toMonthKey(v.fecha) === state.currentMonth)) alerts.push({ level: 'info', text: 'Todavía no hay viajes cerrados en este mes.' });
+  if (!alerts.length) alerts.push({ level: 'good', text: 'No detecté alertas importantes ahora.' });
+  return alerts;
+}
+
+function validateBeforeCloseTrip(trip) {
+  const warnings = [];
+  const metrics = getTripMetrics(trip);
+  if (!trip.fecha) warnings.push('El viaje no tiene fecha.');
+  if (metrics.totalFacturado === 0) warnings.push('El viaje tiene facturado 0.');
+  if ((trip.gastos || []).some((g) => Number(g.monto || 0) < 0)) warnings.push('Hay gastos negativos.');
+  const duplicated = {};
+  [...(trip.pasajeros || []), ...(trip.pedidos || [])].forEach((i) => {
+    const key = `${norm(i.cliente)}|${norm(i.detalle)}|${Number(i.cobro || 0)}`;
+    duplicated[key] = (duplicated[key] || 0) + 1;
+  });
+  if (Object.values(duplicated).some((n) => n > 1)) warnings.push('Hay líneas posiblemente duplicadas en este viaje.');
+  return warnings;
+}
+
+function closeCurrentMonth() {
+  const month = currentMonthData();
+  const tripSummary = getCurrentMonthTripSummary();
+  const totalIngresos = (month.movimientos || []).filter((m) => m.tipo === 'ingreso').reduce((a, m) => a + Number(m.monto || 0), 0);
+  const totalGastos = (month.movimientos || []).filter((m) => m.tipo === 'gasto').reduce((a, m) => a + Number(m.monto || 0), 0);
+  const totalPagadoFijos = (month.gastosFijos || []).filter((g) => g.pagado).reduce((a, g) => a + Number(g.monto || 0), 0);
+  const compromisosPagados = (state.compromisos || []).reduce((a, c) => a + (c.historial || []).filter((h) => toMonthKey(h.fecha) === state.currentMonth).reduce((s, h) => s + Number(h.monto || 0), 0), 0);
+  const cierre = {
+    id: uid(),
+    monthKey: state.currentMonth,
+    closedAt: new Date().toISOString(),
+    totalIngresos, totalGastos, totalPagadoFijos, compromisosPagados,
+    viajes: tripSummary.cantidad,
+    tripFacturado: tripSummary.facturado, tripCobrado: tripSummary.cobrado, tripPendiente: tripSummary.pendiente,
+    tripGastos: tripSummary.gastos, tripGananciaContable: tripSummary.utilidad, tripCaja: tripSummary.caja,
+    balanceCajaMes: totalIngresos - totalGastos - totalPagadoFijos,
+  };
+  if (!confirm(`Cerrar ${state.currentMonth}?\nCaja del mes: ${money(cierre.balanceCajaMes)}\nViajes cobrados: ${money(cierre.tripCobrado)}\nPendiente: ${money(cierre.tripPendiente)}`)) return;
+  month.closedAt = cierre.closedAt;
+  state.monthClosures = [cierre, ...(state.monthClosures || []).filter((x) => x.monthKey !== state.currentMonth)].slice(0, 36);
+  logAction('cierre', `Se cerró el mes ${state.currentMonth}`);
+  saveSnapshot('Cierre de mes');
+  render();
+}
+
+function getCurrentMonthTripSummary() {
+  const tripMonthHistory = (state.historialViajes || []).filter((v) => toMonthKey(v.fecha) === state.currentMonth);
+  return {
+    cantidad: tripMonthHistory.length,
+    facturado: tripMonthHistory.reduce((a, v) => a + Number(v.totalFacturado || 0), 0),
+    cobrado: tripMonthHistory.reduce((a, v) => a + Number(v.totalCobrado || 0), 0),
+    pendiente: tripMonthHistory.reduce((a, v) => a + Number(v.totalPendiente || 0), 0),
+    gastos: tripMonthHistory.reduce((a, v) => a + Number(v.totalGastosViaje || 0), 0),
+    utilidad: tripMonthHistory.reduce((a, v) => a + Number(v.gananciaContable || 0), 0),
+    caja: tripMonthHistory.reduce((a, v) => a + Number(v.cajaNetaReal || 0), 0),
+  };
+}
+
+function exportCsv() {
+  const rows = [['tipo','fecha','categoria','detalle','monto']];
+  Object.entries(state.months || {}).forEach(([monthKey, month]) => {
+    (month.gastosFijos || []).forEach((g) => rows.push(['gasto_fijo', monthKey, g.nombre, g.pagado ? 'pagado' : 'pendiente', Number(g.monto || 0)]));
+    (month.movimientos || []).forEach((m) => rows.push(['movimiento', m.fecha || monthKey, m.categoria, m.descripcion || m.tipo, Number(m.monto || 0)]));
+  });
+  (state.historialViajes || []).forEach((v) => rows.push(['viaje', v.fecha, v.estado || '', 'caja neta real', Number(v.cajaNetaReal || 0)]));
+  const csv = rows.map((r) => r.map((x) => `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `plata-viajes-${state.currentMonth}.csv`;
+  link.click();
+  logAction('export', 'Se exportó un CSV');
+}
+
+function addQuickExpense(category, defaultDetail='') {
+  const amount = prompt(`Monto para ${category}:`, '');
+  if (amount === null) return;
+  const monto = parseAmountInput(amount || 0);
+  if (!monto) return;
+  const detalle = prompt('Detalle (opcional):', defaultDetail) || defaultDetail;
+  currentTrip().gastos.unshift({ id: uid(), categoria: category, detalle, monto });
+  logAction('viaje', `Se agregó gasto rápido ${category} por ${money(monto)}`);
+  render();
+}
+
+function duplicateLastTrip() {
+  const last = (state.historialViajes || [])[0];
+  if (!last) return alert('No hay viajes cerrados para duplicar.');
+  if (!confirm('Duplicar estructura del último viaje al viaje actual?')) return;
+  const cloned = JSON.parse(JSON.stringify(last));
+  migrateTripToUnifiedPedidos(cloned);
+  state.viajeActual = {
+    fecha: today(),
+    notas: cloned.notas || '',
+    pasajeros: (cloned.pasajeros || []).map((i) => normalizeTripLine({ id: uid(), cliente: i.cliente, detalle: i.detalle, cobro: i.cobro, cobradoActual: 0, pagos: [] })),
+    pedidos: (cloned.pedidos || []).map((i) => normalizeTripLine({ id: uid(), cliente: i.cliente, detalle: i.detalle, cobro: i.cobro, cobradoActual: 0, pagos: [] })),
+    gastos: (cloned.gastos || []).map((g) => ({ id: uid(), categoria: g.categoria, detalle: g.detalle, monto: g.monto })),
+  };
+  logAction('viaje', 'Se duplicó el último viaje');
+  setTab('viajes');
+  render();
 }
 
 let state = loadState();
@@ -145,6 +317,7 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  saveSnapshot('Auto');
 }
 
 function cloneFixedExpenses(sourceMonth) {
@@ -410,7 +583,38 @@ function getClientAnalytics(name) {
   return analytics;
 }
 
+function getClientRecentHistory(name) {
+  const rows = [];
+  (state.historialViajes || []).forEach((trip) => {
+    migrateTripToUnifiedPedidos(trip);
+    ['pasajeros','pedidos'].forEach((section) => {
+      (trip[section] || []).forEach((rawItem) => {
+        const item = normalizeTripLine(rawItem);
+        if (norm(item.cliente) !== norm(name)) return;
+        const amounts = lineAmounts(item);
+        rows.push({ fecha: trip.fecha, detalle: item.detalle || section, total: amounts.total, cobrado: amounts.cobrado, pendiente: amounts.pendiente });
+      });
+    });
+  });
+  return rows.sort((a,b) => String(b.fecha).localeCompare(String(a.fecha))).slice(0,8);
+}
 
+function generateClientProfileText(client) {
+  const stats = getClientAnalytics(client.nombre);
+  const recent = getClientRecentHistory(client.nombre);
+  return [
+    `Cliente: ${client.nombre}`,
+    `Teléfono: ${client.telefono || '-'}`,
+    `Notas: ${client.notas || '-'}`,
+    `Viajes: ${stats.viajes}`,
+    `Ítems: ${stats.items}`,
+    `Facturado: ${money(stats.facturado)}`,
+    `Cobrado: ${money(stats.cobrado)}`,
+    `Saldo activo: ${money(stats.pendienteActual)}`,
+    '',
+    ...recent.map((r) => `${r.fecha} · ${r.detalle} · total ${money(r.total)} · cobrado ${money(r.cobrado)} · pendiente ${money(r.pendiente)}`)
+  ].join('\n');
+}
 
 function generateMonthTripSummaryText(monthKey = state.currentMonth) {
   const trips = (state.historialViajes || []).filter((v) => toMonthKey(v.fecha) === monthKey);
@@ -570,9 +774,12 @@ function mergeDebtors(existing, incoming) {
   copy[idx] = {
     ...current,
     saldo: Number(current.saldo || 0) + Number(incoming.saldo || 0),
+    saldoOriginal: Number(current.saldoOriginal || current.saldo || 0) + Number(incoming.saldoOriginal || incoming.saldo || 0),
     itemsPendientes: Number(current.itemsPendientes || 0) + Number(incoming.itemsPendientes || 0),
+    fechaOrigen: current.fechaOrigen || incoming.fechaOrigen || current.ultimoViaje,
     ultimoViaje: incoming.ultimoViaje || current.ultimoViaje,
     detalle: [current.detalle, incoming.detalle].filter(Boolean).join(' | '),
+    observaciones: [current.observaciones, incoming.observaciones].filter(Boolean).join(' | '),
     historial: [...(incoming.historial || []), ...(current.historial || [])],
   };
   return copy;
@@ -581,9 +788,46 @@ function mergeDebtors(existing, incoming) {
 function render() {
   saveState();
   renderGlobalStats();
+  renderDashboard();
   renderPlata();
   renderViajes();
   bindFormDefaults();
+}
+
+function renderDashboard() {
+  const trip = currentTrip();
+  const tripMetrics = getTripMetrics(trip);
+  const debtTotal = (state.deudores || []).reduce((a, d) => a + Number(d.saldo || 0), 0);
+  const debtCount = (state.deudores || []).length;
+  const closures = state.monthClosures || [];
+  const snapshots = loadSnapshots();
+  const alerts = collectDashboardAlerts();
+  const backupBadge = document.getElementById('backupBadge');
+  if (backupBadge) {
+    const days = state.lastBackupAt ? daysBetween(state.lastBackupAt) : null;
+    backupBadge.textContent = state.lastBackupAt ? `Backup ${days === 0 ? 'hoy' : `hace ${days} día${days===1?'':'s'}`}` : 'Sin backup';
+    backupBadge.className = `pill ${!state.lastBackupAt || (days !== null && days >= 7) ? 'warn' : 'ok'}`;
+  }
+  const overview = document.getElementById('dashboardOverview');
+  if (overview) overview.innerHTML = [
+    statCard('Deudores activos', String(debtCount), `${money(debtTotal)} pendientes`),
+    statCard('Viaje actual', money(tripMetrics.cajaNetaReal), 'caja neta real'),
+    statCard('Pendiente viaje', money(tripMetrics.totalPendiente)),
+    statCard('Cierres guardados', String(closures.length)),
+  ].join('');
+  const alertsEl = document.getElementById('dashboardAlerts');
+  if (alertsEl) alertsEl.innerHTML = alerts.map((a) => `<div class="alert-item ${a.level}">${a.text}</div>`).join('');
+  const tripInfo = document.getElementById('dashboardTripInfo');
+  if (tripInfo) {
+    const groups = buildTripClientSummary(trip).slice(0, 5);
+    tripInfo.innerHTML = groups.length ? groups.map((g) => `<div class="alert-item info"><strong>${escapeHtml(g.cliente)}</strong><div class="audit-meta">${g.totalItems} ítems · Cobrado ${money(g.cobrado)} · Pendiente ${money(g.pendiente)}</div></div>`).join('') : '<div class="empty">No hay clientes cargados en el viaje actual.</div>';
+  }
+  const closuresEl = document.getElementById('monthClosuresList');
+  if (closuresEl) closuresEl.innerHTML = closures.length ? closures.map((c) => `<div class="closure-item"><div><strong>${c.monthKey}</strong></div><div class="closure-meta">Cerrado ${new Date(c.closedAt).toLocaleString('es-AR')} · Caja ${money(c.balanceCajaMes)} · Viajes ${c.viajes}</div></div>`).join('') : '<div class="empty">Todavía no cerraste meses.</div>';
+  const auditEl = document.getElementById('auditLogList');
+  if (auditEl) auditEl.innerHTML = (state.auditLog || []).length ? (state.auditLog || []).slice(0, 20).map((a) => `<div class="audit-item"><div><strong>${escapeHtml(a.text)}</strong></div><div class="audit-meta">${new Date(a.at).toLocaleString('es-AR')} · ${escapeHtml(a.type || 'sistema')}</div></div>`).join('') : '<div class="empty">Sin movimientos auditados todavía.</div>';
+  const snapsEl = document.getElementById('snapshotsList');
+  if (snapsEl) snapsEl.innerHTML = snapshots.length ? snapshots.slice(0,5).map((sn, idx) => `<div class="snapshot-item"><div><strong>${escapeHtml(sn.label || 'Auto')}</strong></div><div class="snapshot-meta">${new Date(sn.at).toLocaleString('es-AR')}${idx===0 ? ' · último disponible' : ''}</div></div>`).join('') : '<div class="empty">No hay autosnapshots todavía.</div>';
 }
 
 function renderGlobalStats() {
@@ -770,16 +1014,7 @@ function renderViajes() {
     `);
   });
 
-  const tripMonthHistory = (state.historialViajes || []).filter((v) => toMonthKey(v.fecha) === state.currentMonth);
-  const summary = {
-    cantidad: tripMonthHistory.length,
-    facturado: tripMonthHistory.reduce((a, v) => a + Number(v.totalFacturado || 0), 0),
-    cobrado: tripMonthHistory.reduce((a, v) => a + Number(v.totalCobrado || 0), 0),
-    pendiente: tripMonthHistory.reduce((a, v) => a + Number(v.totalPendiente || 0), 0),
-    gastos: tripMonthHistory.reduce((a, v) => a + Number(v.totalGastosViaje || 0), 0),
-    utilidad: tripMonthHistory.reduce((a, v) => a + Number(v.gananciaContable || 0), 0),
-    caja: tripMonthHistory.reduce((a, v) => a + Number(v.cajaNetaReal || 0), 0),
-  };
+  const summary = getCurrentMonthTripSummary();
   document.getElementById('tripMonthSummary').innerHTML = [
     statCard('Viajes', String(summary.cantidad)),
     statCard('Facturado', money(summary.facturado)),
@@ -833,19 +1068,31 @@ function renderClients() {
   list.innerHTML = clients.length ? '' : emptyHtml('No hay clientes cargados.');
   clients.forEach((c) => {
     const stats = getClientAnalytics(c.nombre);
+    const recent = getClientRecentHistory(c.nombre);
     list.insertAdjacentHTML('beforeend', `
-      <div class="row">
-        <div>
-          <div class="title">${c.nombre}</div>
-          <div class="sub">${c.telefono || 'Sin teléfono'}${c.notas ? ` · ${c.notas}` : ''}</div>
-          <div class="meta">Viajes: ${stats.viajes} · Ítems: ${stats.items} · Facturado: ${money(stats.facturado)} · Debe hoy: ${money(stats.pendienteActual)}</div>
+      <details class="detail-panel">
+        <summary class="row">
+          <div>
+            <div class="title">${c.nombre}</div>
+            <div class="sub">${c.telefono || 'Sin teléfono'}${c.notas ? ` · ${c.notas}` : ''}</div>
+            <div class="inline-metrics">
+              <span class="metric-chip">Viajes ${stats.viajes}</span>
+              <span class="metric-chip">Ítems ${stats.items}</span>
+              <span class="metric-chip">Facturado ${money(stats.facturado)}</span>
+              <span class="metric-chip">Debe ${money(stats.pendienteActual)}</span>
+            </div>
+          </div>
+          <div class="row-actions wrap">
+            <button class="secondary small" onclick="copyClientHistorySummary('${c.id}')">Copiar ficha</button>
+            <button class="secondary small" onclick="viewClientProfile('${c.id}')">Ver ficha</button>
+            <button class="secondary small" onclick="editClient('${c.id}')">Editar</button>
+            <button class="secondary small" onclick="removeClient('${c.id}')">Borrar</button>
+          </div>
+        </summary>
+        <div class="detail-panel">
+          ${recent.length ? recent.map((r) => `<div class="row"><div><div class="title">${r.fecha}</div><div class="sub">${escapeHtml(r.detalle)}</div></div><div class="row-actions wrap"><div class="amount">${money(r.total)}</div><div class="meta">Cobrado ${money(r.cobrado)} · Pendiente ${money(r.pendiente)}</div></div></div>`).join('') : '<div class="empty">Sin historial reciente.</div>'}
         </div>
-        <div class="row-actions">
-          <button class="secondary small" onclick="copyClientHistorySummary('${c.id}')">Copiar ficha</button>
-          <button class="secondary small" onclick="editClient('${c.id}')">Editar</button>
-          <button class="secondary small" onclick="removeClient('${c.id}')">Borrar</button>
-        </div>
-      </div>
+      </details>
     `);
   });
 }
@@ -853,7 +1100,7 @@ function renderClients() {
 function renderDebtors() {
   const q = norm(document.getElementById('debtorSearch')?.value || '');
   const list = document.getElementById('debtorsList');
-  const debtors = (state.deudores || []).filter((d) => !q || [d.nombre, d.detalle].join(' ').toLowerCase().includes(q));
+  const debtors = (state.deudores || []).filter((d) => !q || [d.nombre, d.detalle, d.observaciones || ''].join(' ').toLowerCase().includes(q));
   list.innerHTML = debtors.length ? '' : emptyHtml('No hay deudores activos.');
   debtors.forEach((d) => {
     const history = (d.historial || []).map((h) => `
@@ -865,18 +1112,20 @@ function renderDebtors() {
         <div class="amount">${money(h.monto)}</div>
       </div>
     `).join('');
+    const edad = daysBetween(d.fechaOrigen || d.ultimoViaje);
     list.insertAdjacentHTML('beforeend', `
       <div class="card inner">
         <div class="card-body">
           <div class="row">
             <div>
               <div class="title">${d.nombre}</div>
-              <div class="sub">Saldo ${money(d.saldo)} · Ítems ${d.itemsPendientes || 1}</div>
-              <div class="meta">Último movimiento: ${d.ultimoViaje || '-'}${d.detalle ? ` · ${d.detalle}` : ''}</div>
+              <div class="sub">Saldo ${money(d.saldo)} · Original ${money(d.saldoOriginal || d.saldo)} · Ítems ${d.itemsPendientes || 1}</div>
+              <div class="meta">Origen: ${d.fechaOrigen || d.ultimoViaje || '-'} · Antigüedad ${edad} días${d.detalle ? ` · ${d.detalle}` : ''}${d.observaciones ? ` · ${d.observaciones}` : ''}</div>
             </div>
-            <div class="row-actions">
+            <div class="row-actions wrap">
               <button class="secondary small" onclick="editDebtor('${d.id}')">Editar</button>
               <button class="secondary small" onclick="payDebtor('${d.id}')">Registrar pago</button>
+              <button class="secondary small" onclick="settleDebtor('${d.id}')">Saldar todo</button>
               <button class="secondary small" onclick="removeDebtor('${d.id}')">Borrar</button>
             </div>
           </div>
@@ -929,6 +1178,7 @@ function bindFormDefaults() {
 function addFixed() {
   markCurrentMonthFixedCustomized();
   currentMonthData().gastosFijos.push({ id: uid(), nombre: 'Nuevo gasto', monto: 0, pagado: false });
+  logAction('plata', 'Se agregó un gasto fijo');
   render();
 }
 function toggleFixedPaid(id) {
@@ -936,6 +1186,7 @@ function toggleFixedPaid(id) {
   if (!item) return;
   markCurrentMonthFixedCustomized();
   item.pagado = !item.pagado;
+  logAction('plata', `Se marcó gasto fijo ${item.nombre} como ${item.pagado ? 'pagado' : 'pendiente'}`);
   render();
 }
 function editFixed(id) {
@@ -948,6 +1199,7 @@ function editFixed(id) {
   markCurrentMonthFixedCustomized();
   item.nombre = nombre.trim();
   item.monto = parseAmountInput(monto || 0);
+  logAction('plata', `Se editó gasto fijo ${item.nombre}`);
   render();
 }
 function removeFixed(id) {
@@ -972,6 +1224,7 @@ function addCommitmentFromForm(ev) {
     if (!montoCuota || !cuotasRestantes) return;
     state.compromisos.unshift({ id: uid(), tipo, nombre, montoCuota, cuotasRestantes, historial: [] });
   }
+  logAction('viaje', `Se agregó ${section === 'pasajeros' ? 'pasajero' : 'pedido'} ${item.cliente || item.detalle} por ${money(item.cobro)}`);
   ev.target.reset();
   render();
 }
@@ -1034,6 +1287,7 @@ function addMovementFromForm(ev) {
   };
   if (!entry.categoria || !entry.monto) return;
   currentMonthData().movimientos.unshift(entry);
+  logAction('plata', `Se agregó movimiento ${entry.categoria} por ${money(entry.monto)}`);
   ev.target.reset();
   document.querySelector('#movementForm [name="fecha"]').value = today();
   render();
@@ -1052,6 +1306,7 @@ function editMovement(id) {
   const monto = prompt('Monto:', m.monto);
   if (monto === null) return;
   Object.assign(m, { fecha, tipo, categoria, descripcion, monto: parseAmountInput(monto || 0) });
+  logAction('plata', `Se editó movimiento ${m.categoria}`);
   render();
 }
 function removeMovement(id) {
@@ -1065,6 +1320,7 @@ function addTripLineFromForm(ev) {
   const fd = new FormData(ev.target);
   const cobro = parseAmountInput(fd.get('cobro') || 0);
   const cobradoInicial = Math.max(0, Math.min(parseAmountInput(fd.get('cobradoInicial') || 0), cobro));
+  if (!cobro) return alert('El total a cobrar no puede quedar en 0.');
   const item = normalizeTripLine({
     id: uid(),
     cliente: String(fd.get('cliente') || '').trim(),
@@ -1098,9 +1354,11 @@ function editTripLine(section, id) {
   item.cobro = parseAmountInput(cobro || 0);
   item.cobradoActual = Math.max(0, Math.min(parseAmountInput(cobradoActual || 0), Number(item.cobro || 0)));
   item.pagado = item.cobradoActual >= item.cobro;
+  if (item.cobradoActual > item.cobro) item.cobradoActual = item.cobro;
   if (item.cliente && !(state.clientesFrecuentes || []).some((c) => norm(c.nombre) === norm(item.cliente))) {
     state.clientesFrecuentes.unshift({ id: uid(), nombre: item.cliente, telefono: '', notas: '' });
   }
+  logAction('viaje', `Se editó línea de viaje de ${item.cliente || item.detalle}`);
   render();
 }
 function registerTripItemPayment(section, id) {
@@ -1113,10 +1371,12 @@ Pendiente actual: ${money(amounts.pendiente)}`, String(amounts.pendiente));
   if (amount === null) return;
   const m = parseAmountInput(amount || 0);
   if (!m) return;
+  if (m > amounts.pendiente && !confirm(`El pago supera lo pendiente (${money(amounts.pendiente)}). ¿Aplicar solo hasta saldar?`)) return;
   const aplicado = Math.max(0, Math.min(m, amounts.pendiente));
   item.cobradoActual = amounts.cobrado + aplicado;
   item.pagado = item.cobradoActual >= item.cobro;
   item.pagos.unshift({ id: uid(), fecha: today(), monto: aplicado, texto: 'Pago durante viaje' });
+  logAction('viaje', `${item.cliente || 'Cliente'} pagó ${money(aplicado)} durante el viaje`);
   render();
 }
 function resetTripItemPayment(section, id) {
@@ -1126,6 +1386,7 @@ function resetTripItemPayment(section, id) {
   item.cobradoActual = 0;
   item.pagado = false;
   item.pagos = [];
+  logAction('viaje', `Se reseteó el cobro de ${item.cliente || item.detalle}`);
   render();
 }
 function toggleTripItemPaid(section, id) {
@@ -1140,10 +1401,13 @@ function toggleTripItemPaid(section, id) {
     item.cobradoActual = 0;
     item.pagado = false;
   }
+  logAction('viaje', `${item.cliente || item.detalle} quedó ${item.pagado ? 'totalmente cobrado' : 'pendiente'}`);
   render();
 }
 function removeTripItem(section, id) {
+  const removed = currentTrip()[section].find((x) => x.id === id);
   currentTrip()[section] = currentTrip()[section].filter((x) => x.id !== id);
+  if (removed) logAction('viaje', `Se eliminó ${removed.cliente || removed.detalle} del viaje`);
   render();
 }
 
@@ -1158,6 +1422,7 @@ function addTripExpenseFromForm(ev) {
   };
   if (!item.categoria || !item.monto) return;
   currentTrip().gastos.unshift(item);
+  logAction('viaje', `Se agregó gasto ${item.categoria} por ${money(item.monto)}`);
   ev.target.reset();
   render();
 }
@@ -1172,10 +1437,13 @@ function editTripExpense(id) {
   if (monto === null) return;
   Object.assign(item, { categoria: categoria.trim(), detalle: detalle.trim(), monto: parseAmountInput(monto || 0) });
   if (categoria.trim() && !(state.tripExpenseCategories || []).includes(categoria.trim())) state.tripExpenseCategories.push(categoria.trim());
+  logAction('viaje', `Se editó gasto ${item.categoria}`);
   render();
 }
 function removeTripExpense(id) {
+  const removed = currentTrip().gastos.find((x) => x.id === id);
   currentTrip().gastos = currentTrip().gastos.filter((x) => x.id !== id);
+  if (removed) logAction('viaje', `Se eliminó gasto ${removed.categoria}`);
   render();
 }
 function addExpenseCategory() {
@@ -1183,11 +1451,13 @@ function addExpenseCategory() {
   const val = String(input.value || '').trim();
   if (!val) return;
   if (!(state.tripExpenseCategories || []).includes(val)) state.tripExpenseCategories.push(val);
+  logAction('viaje', `Se agregó categoría de gasto ${val}`);
   input.value = '';
   render();
 }
 function removeExpenseCategory(name) {
   state.tripExpenseCategories = (state.tripExpenseCategories || []).filter((c) => c !== name);
+  logAction('viaje', `Se eliminó categoría de gasto ${name}`);
   render();
 }
 
@@ -1198,6 +1468,7 @@ function addClientFromForm(ev) {
   if (!nombre) return;
   if ((state.clientesFrecuentes || []).some((c) => norm(c.nombre) === norm(nombre))) return;
   state.clientesFrecuentes.unshift({ id: uid(), nombre, telefono: String(fd.get('telefono') || '').trim(), notas: String(fd.get('notas') || '').trim() });
+  logAction('cliente', `Se agregó cliente ${nombre}`);
   ev.target.reset();
   render();
 }
@@ -1211,10 +1482,13 @@ function editClient(id) {
   const notas = prompt('Notas:', c.notas || '');
   if (notas === null) return;
   Object.assign(c, { nombre: nombre.trim(), telefono: telefono.trim(), notas: notas.trim() });
+  logAction('cliente', `Se editó cliente ${c.nombre}`);
   render();
 }
 function removeClient(id) {
+  const removed = (state.clientesFrecuentes || []).find((x) => x.id === id);
   state.clientesFrecuentes = (state.clientesFrecuentes || []).filter((x) => x.id !== id);
+  if (removed) logAction('cliente', `Se borró cliente ${removed.nombre}`);
   render();
 }
 
@@ -1228,11 +1502,15 @@ function addManualDebtorFromForm(ev) {
   state.deudores = mergeDebtors(state.deudores || [], {
     nombre,
     saldo,
+    saldoOriginal: saldo,
     itemsPendientes: 1,
+    fechaOrigen: today(),
     ultimoViaje: today(),
     detalle,
+    observaciones: '',
     historial: [{ id: uid(), fecha: today(), monto: saldo, texto: 'Alta manual' }],
   });
+  logAction('deudor', `Alta manual de deudor ${nombre} por ${money(saldo)}`);
   ev.target.reset();
   render();
 }
@@ -1241,13 +1519,16 @@ function editDebtor(id) {
   if (!d) return;
   const nombre = prompt('Nombre:', d.nombre);
   if (nombre === null) return;
-  const saldo = prompt('Saldo:', d.saldo);
+  const saldo = prompt('Saldo actual:', d.saldo);
   if (saldo === null) return;
   const items = prompt('Ítems pendientes:', d.itemsPendientes || 1);
   if (items === null) return;
   const detalle = prompt('Detalle:', d.detalle || '');
   if (detalle === null) return;
-  Object.assign(d, { nombre: nombre.trim(), saldo: Number(saldo || 0), itemsPendientes: Number(items || 1), detalle: detalle.trim() });
+  const obs = prompt('Observaciones:', d.observaciones || '');
+  if (obs === null) return;
+  Object.assign(d, { nombre: nombre.trim(), saldo: parseAmountInput(saldo || 0), itemsPendientes: Number(items || 1), detalle: detalle.trim(), observaciones: obs.trim() });
+  logAction('deudor', `Se editó deudor ${d.nombre}`);
   render();
 }
 function payDebtor(id) {
@@ -1256,19 +1537,25 @@ function payDebtor(id) {
   const amount = prompt('Monto que pagó:', '0');
   if (amount === null) return;
   const m = parseAmountInput(amount || 0);
-  d.saldo = Math.max(0, Number(d.saldo || 0) - m);
-  d.historial.unshift({ id: uid(), fecha: today(), monto: m, texto: 'Pago registrado' });
+  if (m > Number(d.saldo || 0) && !confirm(`El pago supera el saldo actual (${money(d.saldo)}). ¿Aplicarlo igual hasta saldar?`)) return;
+  const aplicado = Math.min(m, Number(d.saldo || 0));
+  d.saldo = Math.max(0, Number(d.saldo || 0) - aplicado);
+  d.historial.unshift({ id: uid(), fecha: today(), monto: aplicado, texto: 'Pago registrado' });
+  logAction('deudor', `${d.nombre} pagó ${money(aplicado)}`);
   state.deudores = state.deudores.filter((x) => Number(x.saldo || 0) > 0);
   render();
 }
 function removeDebtor(id) {
+  const removed = (state.deudores || []).find((x) => x.id === id);
   state.deudores = (state.deudores || []).filter((x) => x.id !== id);
+  if (removed) logAction('deudor', `Se eliminó deudor ${removed.nombre}`);
   render();
 }
 
 function closeTrip() {
   const trip = currentTrip();
   const metrics = getTripMetrics(trip);
+  const warnings = validateBeforeCloseTrip(trip);
   const preview = [
     `Fecha: ${trip.fecha}`,
     `Facturado: ${money(metrics.totalFacturado)}`,
@@ -1277,9 +1564,11 @@ function closeTrip() {
     `Gastos: ${money(metrics.totalGastos)}`,
     `Ganancia contable: ${money(metrics.gananciaContable)}`,
     `Caja neta real: ${money(metrics.cajaNetaReal)}`,
+    warnings.length ? '' : null,
+    warnings.length ? `Advertencias: ${warnings.join(' | ')}` : null,
     '',
     '¿Cerrar viaje con estos datos?'
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   if (!confirm(preview)) return;
   const allDebtLines = [
     ...(trip.pasajeros || []).map((i) => ({ ...i, origen: 'Pasajero' })),
@@ -1307,9 +1596,12 @@ function closeTrip() {
     debtors = mergeDebtors(debtors, {
       nombre: i.cliente || 'Sin nombre',
       saldo: Number(i.__amounts.pendiente || 0),
+      saldoOriginal: Number(i.__amounts.pendiente || 0),
       itemsPendientes: 1,
+      fechaOrigen: trip.fecha,
       ultimoViaje: trip.fecha,
       detalle: `${i.origen}${i.detalle ? ` · ${i.detalle}` : ''}`,
+      observaciones: '',
       historial: [{ id: uid(), fecha: today(), monto: Number(i.__amounts.pendiente || 0), texto: `Sumado desde viaje ${trip.fecha}` }],
     });
   });
@@ -1325,6 +1617,7 @@ function closeTrip() {
     monto: metrics.cajaNetaReal,
   });
   state.viajeActual = emptyTrip();
+  logAction('viaje', `Se cerró viaje ${trip.fecha} (${estado}) con caja ${money(metrics.cajaNetaReal)}`);
   render();
 }
 
@@ -1341,13 +1634,16 @@ function removeTripHistory(id) {
   render();
 }
 
-function backupData() {
+function backupData(silent = false) {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
   const stamp = new Date().toISOString().replace(/[:.]/g,'-');
   link.download = `backup-plata-viajes-${state.currentMonth}-${stamp}.json`;
   link.click();
+  state.lastBackupAt = today();
+  logAction('backup', 'Se descargó un backup manual');
+  if (!silent) render();
 }
 function importData(file) {
   if (!file) return;
@@ -1358,6 +1654,7 @@ function importData(file) {
       repairMonthChainFromPrevious();
       normalizeTrip(state.viajeActual);
       (state.historialViajes || []).forEach(normalizeTrip);
+      logAction('import', 'Se importó un backup');
       render();
       alert('Backup importado.');
     } catch {
@@ -1391,18 +1688,13 @@ function copyClientTripSummary(clientName) {
 function copyClientHistorySummary(id) {
   const c = (state.clientesFrecuentes || []).find((x) => x.id === id);
   if (!c) return;
-  const stats = getClientAnalytics(c.nombre);
-  const text = [
-    `Cliente: ${c.nombre}`,
-    `Teléfono: ${c.telefono || '-'}`,
-    `Notas: ${c.notas || '-'}`,
-    `Viajes registrados: ${stats.viajes}`,
-    `Ítems registrados: ${stats.items}`,
-    `Facturado histórico: ${money(stats.facturado)}`,
-    `Cobrado histórico: ${money(stats.cobrado)}`,
-    `Saldo activo actual: ${money(stats.pendienteActual)}`,
-  ].join('\n');
+  const text = generateClientProfileText(c);
   navigator.clipboard.writeText(text).then(() => alert('Ficha del cliente copiada.'));
+}
+function viewClientProfile(id) {
+  const c = (state.clientesFrecuentes || []).find((x) => x.id === id);
+  if (!c) return;
+  alert(generateClientProfileText(c));
 }
 
 function wireEvents() {
@@ -1415,6 +1707,7 @@ function wireEvents() {
     const nextMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     ensureMonth(nextMonth, previousMonth, { forceFromSource: true });
     state.currentMonth = nextMonth;
+    logAction('mes', `Se creó/cambió al mes ${nextMonth}`);
     render();
   });
   const repairMonthBtn = document.getElementById('repairMonthBtn');
@@ -1425,9 +1718,13 @@ function wireEvents() {
     const selectedMonth = e.target.value;
     ensureMonth(selectedMonth, previousMonth, { forceFromSource: false });
     state.currentMonth = selectedMonth;
+    logAction('mes', `Se abrió el mes ${selectedMonth}`);
     render();
   });
-  document.getElementById('backupBtn').addEventListener('click', backupData);
+  document.getElementById('backupBtn').addEventListener('click', () => backupData(false));
+  document.getElementById('csvBtn').addEventListener('click', exportCsv);
+  document.getElementById('restoreSnapshotBtn').addEventListener('click', restoreLatestSnapshot);
+  document.getElementById('closeMonthBtn').addEventListener('click', closeCurrentMonth);
   document.getElementById('importInput').addEventListener('change', (e) => importData(e.target.files?.[0]));
 
   document.getElementById('addFixedBtn').addEventListener('click', addFixed);
@@ -1441,8 +1738,20 @@ function wireEvents() {
   document.getElementById('tripNotes').addEventListener('input', (e) => { currentTrip().notas = e.target.value; render(); });
   document.getElementById('closeTripBtn').addEventListener('click', closeTrip);
   document.getElementById('copyTripSummaryBtn').addEventListener('click', copyTripSummary);
+  const copyTripSummaryBtnBottom = document.getElementById('copyTripSummaryBtnBottom');
+  if (copyTripSummaryBtnBottom) copyTripSummaryBtnBottom.addEventListener('click', copyTripSummary);
   const copyMonthBtn = document.getElementById('copyMonthTripSummaryBtn');
   if (copyMonthBtn) copyMonthBtn.addEventListener('click', copyMonthTripSummary);
+  const copyMonthDashboard = document.getElementById('copyMonthSummaryDashboardBtn');
+  if (copyMonthDashboard) copyMonthDashboard.addEventListener('click', copyMonthTripSummary);
+  const duplicateLastTripBtn = document.getElementById('duplicateLastTripBtn');
+  if (duplicateLastTripBtn) duplicateLastTripBtn.addEventListener('click', duplicateLastTrip);
+  const quickFuelBtn = document.getElementById('quickFuelBtn');
+  if (quickFuelBtn) quickFuelBtn.addEventListener('click', () => addQuickExpense('Combustible'));
+  const quickTollBtn = document.getElementById('quickTollBtn');
+  if (quickTollBtn) quickTollBtn.addEventListener('click', () => addQuickExpense('Peajes'));
+  const quickGarageBtn = document.getElementById('quickGarageBtn');
+  if (quickGarageBtn) quickGarageBtn.addEventListener('click', () => addQuickExpense('Cochera'));
 
   document.getElementById('clientForm').addEventListener('submit', addClientFromForm);
   document.getElementById('clientSearch').addEventListener('input', render);
@@ -1487,6 +1796,11 @@ window.settleDebtor = settleDebtor;
 window.copyClientHistorySummary = copyClientHistorySummary;
 window.copyTripHistorySummary = copyTripHistorySummary;
 window.removeTripHistory = removeTripHistory;
+window.viewClientProfile = viewClientProfile;
+window.addQuickExpense = addQuickExpense;
+window.closeCurrentMonth = closeCurrentMonth;
+window.restoreLatestSnapshot = restoreLatestSnapshot;
+window.exportCsv = exportCsv;
 
 wireEvents();
 render();
