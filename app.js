@@ -1,5 +1,5 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v11';
-const STORAGE_KEYS = ['plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
+const STORAGE_KEY = 'plata-viajes-pwa-v12';
+const STORAGE_KEYS = ['plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -166,6 +166,28 @@ function isPlaceholderMonth(month) {
   return movimientos.length === 0 && fixed.length > 0 && fixed.every((g) => Number(g?.monto || 0) === 0 && !g?.pagado);
 }
 
+function fixedNamesSignature(month) {
+  return (month?.gastosFijos || [])
+    .map((g) => String(g?.nombre || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join('|');
+}
+
+function isLikelyCorruptedAutoMonth(month, referenceMonth) {
+  if (!month || !referenceMonth) return false;
+  const movimientos = Array.isArray(month.movimientos) ? month.movimientos : [];
+  const fixed = Array.isArray(month.gastosFijos) ? month.gastosFijos : [];
+  const refFixed = Array.isArray(referenceMonth.gastosFijos) ? referenceMonth.gastosFijos : [];
+  if (movimientos.length > 0) return false;
+  if (!fixed.length || !refFixed.length) return false;
+  const allPending = fixed.every((g) => !g?.pagado);
+  const namesDiffer = fixedNamesSignature(month) !== fixedNamesSignature(referenceMonth);
+  const suspiciousFixed495 = fixed.length > 0 && fixed.every((g) => Number(g?.monto || 0) === 495000);
+  const suspiciousTotal495 = fixed.reduce((acc, g) => acc + Number(g?.monto || 0), 0) === 495000;
+  return allPending && (namesDiffer || suspiciousFixed495 || suspiciousTotal495);
+}
+
+
 function previousMonthKey(monthKey) {
   const [y, m] = String(monthKey).split('-').map(Number);
   const d = new Date(y, (m || 1) - 2, 1);
@@ -189,8 +211,11 @@ function findReferenceMonthForNewMonth(monthKey, sourceMonthKey = state.currentM
   return withFixed || explicitSource || baseMonth();
 }
 
-function ensureMonth(monthKey, sourceMonthKey = state.currentMonth) {
-  const reference = findReferenceMonthForNewMonth(monthKey, sourceMonthKey);
+function ensureMonth(monthKey, sourceMonthKey = state.currentMonth, { forceFromSource = false } = {}) {
+  const sourceReference = state.months[sourceMonthKey];
+  const reference = forceFromSource && hasMeaningfulFixedExpenses(sourceReference)
+    ? sourceReference
+    : findReferenceMonthForNewMonth(monthKey, sourceMonthKey);
   const existing = state.months[monthKey];
 
   if (!existing) {
@@ -203,13 +228,34 @@ function ensureMonth(monthKey, sourceMonthKey = state.currentMonth) {
 
   const existingHasMeaningfulFixed = hasMeaningfulFixedExpenses(existing);
   const existingLooksPlaceholder = isPlaceholderMonth(existing);
-  if ((!existingHasMeaningfulFixed || existingLooksPlaceholder) && hasMeaningfulFixedExpenses(reference)) {
+  const existingLooksCorrupted = isLikelyCorruptedAutoMonth(existing, reference);
+
+  if ((!existingHasMeaningfulFixed || existingLooksPlaceholder || existingLooksCorrupted) && hasMeaningfulFixedExpenses(reference)) {
     state.months[monthKey] = {
       ...existing,
       gastosFijos: cloneFixedExpenses(reference),
       movimientos: Array.isArray(existing.movimientos) ? existing.movimientos : [],
     };
   }
+}
+
+function repairCurrentMonthFromPrevious() {
+  const currentKey = state.currentMonth;
+  const prevKey = previousMonthKey(currentKey);
+  const prevMonth = state.months[prevKey];
+  if (!hasMeaningfulFixedExpenses(prevMonth)) {
+    alert('No encontré un mes anterior válido para usar como referencia.');
+    return;
+  }
+  const existing = state.months[currentKey] || { movimientos: [] };
+  state.months[currentKey] = {
+    ...existing,
+    gastosFijos: cloneFixedExpenses(prevMonth),
+    movimientos: Array.isArray(existing.movimientos) ? existing.movimientos : [],
+  };
+  render();
+  saveState();
+  alert(`Mes reparado tomando como referencia ${prevKey}.`);
 }
 
 function currentMonthData() {
@@ -1288,15 +1334,17 @@ function wireEvents() {
     const [y, m] = previousMonth.split('-').map(Number);
     const d = new Date(y, m, 1);
     const nextMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    ensureMonth(nextMonth, previousMonth);
+    ensureMonth(nextMonth, previousMonth, { forceFromSource: true });
     state.currentMonth = nextMonth;
     render();
   });
+  const repairMonthBtn = document.getElementById('repairMonthBtn');
+  if (repairMonthBtn) repairMonthBtn.addEventListener('click', repairCurrentMonthFromPrevious);
   document.getElementById('monthPicker').addEventListener('change', (e) => {
     saveState();
     const previousMonth = state.currentMonth;
     const selectedMonth = e.target.value;
-    ensureMonth(selectedMonth, previousMonth);
+    ensureMonth(selectedMonth, previousMonth, { forceFromSource: false });
     state.currentMonth = selectedMonth;
     render();
   });

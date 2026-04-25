@@ -99,3 +99,9 @@ Versión v11:
 - Nuevo mes toma siempre como referencia el último mes cargado inmediato anterior.
 - Los gastos fijos se copian con mismo nombre y mismo monto, y quedan pendientes.
 - Todo monto menor a 1000 se interpreta como miles: 35 => 35000, 5 => 5000, 14 => 14000.
+
+
+Versión v12:
+- Nuevo mes copia SIEMPRE desde el mes actual inmediato anterior.
+- Reparar mes rehace los gastos fijos del mes actual tomando como base el mes anterior.
+- Meses bugueados viejos sin movimientos y con gastos fijos raros se corrigen solos al abrirlos.
