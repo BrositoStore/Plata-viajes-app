@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v2';
+const STORAGE_KEY = 'plata-viajes-pwa-v3';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -9,6 +9,40 @@ const monthKeyNow = () => {
 const toMonthKey = (date) => String(date || '').slice(0, 7);
 const money = (n) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(Number(n || 0));
 const norm = (v) => String(v || '').trim().toLowerCase();
+
+function lineAmounts(item) {
+  const total = Number(item?.cobro || 0);
+  let cobrado = item && Object.prototype.hasOwnProperty.call(item, 'cobradoActual')
+    ? Number(item.cobradoActual || 0)
+    : (item?.pagado ? total : 0);
+  if (Number.isNaN(cobrado)) cobrado = 0;
+  cobrado = Math.max(0, Math.min(total, cobrado));
+  const pendiente = Math.max(0, total - cobrado);
+  return {
+    total,
+    cobrado,
+    pendiente,
+    estado: pendiente === 0 ? 'Pagado' : cobrado > 0 ? 'Pago parcial' : 'Debe',
+  };
+}
+
+function normalizeTripLine(item) {
+  if (!item) return item;
+  const amounts = lineAmounts(item);
+  item.cobradoActual = amounts.cobrado;
+  item.pagado = amounts.pendiente === 0;
+  if (!Array.isArray(item.pagos)) item.pagos = [];
+  return item;
+}
+
+function normalizeTrip(trip) {
+  if (!trip) return trip;
+  ['pasajeros', 'pedidosTransferencia', 'pedidosConSobre', 'pedidosProvincia'].forEach((section) => {
+    trip[section] = (trip[section] || []).map((item) => normalizeTripLine(item));
+  });
+  return trip;
+}
+
 
 const emptyTrip = () => ({
   fecha: today(),
@@ -48,6 +82,8 @@ const initialState = () => {
 };
 
 let state = loadState();
+normalizeTrip(state.viajeActual);
+(state.historialViajes || []).forEach(normalizeTrip);
 
 function loadState() {
   try {
@@ -132,11 +168,13 @@ function getClientAnalytics(name) {
   const seenTrips = new Set();
   (state.historialViajes || []).forEach((trip) => {
     ['pasajeros', 'pedidosTransferencia', 'pedidosConSobre', 'pedidosProvincia'].forEach((section) => {
-      (trip[section] || []).forEach((item) => {
+      (trip[section] || []).forEach((rawItem) => {
+        const item = normalizeTripLine(rawItem);
         if (norm(item.cliente) !== norm(name)) return;
+        const amounts = lineAmounts(item);
         analytics.items += 1;
-        analytics.facturado += Number(item.cobro || 0);
-        if (item.pagado) analytics.cobrado += Number(item.cobro || 0);
+        analytics.facturado += amounts.total;
+        analytics.cobrado += amounts.cobrado;
         if (!seenTrips.has(trip.id)) {
           seenTrips.add(trip.id);
           analytics.viajes += 1;
@@ -159,7 +197,9 @@ function buildTripClientSummary(trip) {
     ['pedidosProvincia', 'Provincia'],
   ];
   sections.forEach(([key, label]) => {
-    (trip[key] || []).forEach((item) => {
+    (trip[key] || []).forEach((rawItem) => {
+      const item = normalizeTripLine(rawItem);
+      const amounts = lineAmounts(item);
       const name = item.cliente || 'Sin nombre';
       if (!groups[name]) {
         groups[name] = {
@@ -174,8 +214,9 @@ function buildTripClientSummary(trip) {
       }
       groups[name].totalItems += 1;
       groups[name].counts[label] += 1;
-      groups[name].facturado += Number(item.cobro || 0);
-      groups[name][item.pagado ? 'cobrado' : 'pendiente'] += Number(item.cobro || 0);
+      groups[name].facturado += amounts.total;
+      groups[name].cobrado += amounts.cobrado;
+      groups[name].pendiente += amounts.pendiente;
       if (item.detalle) groups[name].detalles.push(item.detalle);
     });
   });
@@ -188,10 +229,10 @@ function generateTripSummaryText(trip) {
     ...(trip.pedidosTransferencia || []),
     ...(trip.pedidosConSobre || []),
     ...(trip.pedidosProvincia || []),
-  ];
-  const totalFacturado = allLines.reduce((a, i) => a + Number(i.cobro || 0), 0);
-  const totalCobrado = allLines.filter((i) => i.pagado).reduce((a, i) => a + Number(i.cobro || 0), 0);
-  const totalPendiente = allLines.filter((i) => !i.pagado).reduce((a, i) => a + Number(i.cobro || 0), 0);
+  ].map(normalizeTripLine);
+  const totalFacturado = allLines.reduce((a, i) => a + lineAmounts(i).total, 0);
+  const totalCobrado = allLines.reduce((a, i) => a + lineAmounts(i).cobrado, 0);
+  const totalPendiente = allLines.reduce((a, i) => a + lineAmounts(i).pendiente, 0);
   const totalGastos = (trip.gastos || []).reduce((a, i) => a + Number(i.monto || 0), 0);
   const gananciaContable = totalFacturado - totalGastos;
   const cajaNeta = totalCobrado - totalGastos;
@@ -394,12 +435,12 @@ function renderViajes() {
         <div>
           <div class="title">${g.cliente}</div>
           <div class="sub">${detailParts.join(' · ') || 'Sin detalle'} · ${g.totalItems} ítems</div>
-          <div class="meta">Cobró ${money(g.cobrado)} / Debe ${money(g.pendiente)}</div>
+          <div class="meta">Cobrado ${money(g.cobrado)} / Pendiente ${money(g.pendiente)}</div>
         </div>
         <div class="row-actions">
           <div class="amount">${money(g.facturado)}</div>
           <button class="secondary small" onclick="copyClientTripSummary('${safeName}')">Copiar</button>
-          ${g.pendiente > 0 ? `<button class="secondary small" onclick="setClientPaidStatus('${safeName}', true)">Marcar todo pagado</button>` : `<button class="secondary small" onclick="setClientPaidStatus('${safeName}', false)">Poner debe</button>`}
+          ${g.pendiente > 0 ? `<button class="secondary small" onclick="setClientPaidStatus('${safeName}', true)">Marcar todo cobrado</button>` : `<button class="secondary small" onclick="setClientPaidStatus('${safeName}', false)">Volver a pendiente</button>`}
         </div>
       </div>
     `);
@@ -456,17 +497,19 @@ function renderTripSection(sectionKey, targetId) {
   const trip = currentTrip();
   const items = trip[sectionKey] || [];
   list.innerHTML = items.length ? '' : emptyHtml('Sin cargar.');
-  items.forEach((item) => {
+  items.forEach((rawItem) => {
+    const item = normalizeTripLine(rawItem);
+    const amounts = lineAmounts(item);
     list.insertAdjacentHTML('beforeend', `
       <div class="row">
         <div>
           <div class="title">${item.cliente || 'Sin cliente'}</div>
           <div class="sub">${item.detalle || 'Sin detalle'}</div>
-          <div class="meta">${item.pagado ? 'Pagado' : 'Debe'}</div>
+          <div class="meta">${amounts.estado} · Cobrado ${money(amounts.cobrado)} / Pendiente ${money(amounts.pendiente)}</div>
         </div>
         <div class="row-actions">
-          <div class="amount ${item.pagado ? 'good' : 'danger'}">${money(item.cobro)}</div>
-          <button class="secondary small" onclick="toggleTripItemPaid('${sectionKey}','${item.id}')">${item.pagado ? 'Poner debe' : 'Marcar pagado'}</button>
+          <div class="amount ${amounts.pendiente === 0 ? 'good' : amounts.cobrado > 0 ? '' : 'danger'}">${money(amounts.total)}</div>
+          ${amounts.pendiente > 0 ? `<button class="secondary small" onclick="registerTripItemPayment('${sectionKey}','${item.id}')">Registrar pago</button>` : `<button class="secondary small" onclick="resetTripItemPayment('${sectionKey}','${item.id}')">Volver a pendiente</button>`}
           <button class="secondary small" onclick="editTripLine('${sectionKey}','${item.id}')">Editar</button>
           <button class="secondary small" onclick="removeTripItem('${sectionKey}','${item.id}')">Borrar</button>
         </div>
@@ -542,10 +585,10 @@ function getTripMetrics(trip) {
     ...(trip.pedidosTransferencia || []),
     ...(trip.pedidosConSobre || []),
     ...(trip.pedidosProvincia || []),
-  ];
-  const totalFacturado = allLines.reduce((a, i) => a + Number(i.cobro || 0), 0);
-  const totalCobrado = allLines.filter((i) => i.pagado).reduce((a, i) => a + Number(i.cobro || 0), 0);
-  const totalPendiente = allLines.filter((i) => !i.pagado).reduce((a, i) => a + Number(i.cobro || 0), 0);
+  ].map(normalizeTripLine);
+  const totalFacturado = allLines.reduce((a, i) => a + lineAmounts(i).total, 0);
+  const totalCobrado = allLines.reduce((a, i) => a + lineAmounts(i).cobrado, 0);
+  const totalPendiente = allLines.reduce((a, i) => a + lineAmounts(i).pendiente, 0);
   const totalGastos = (trip.gastos || []).reduce((a, g) => a + Number(g.monto || 0), 0);
   return {
     totalFacturado,
@@ -710,13 +753,16 @@ function addTripLineFromForm(ev) {
   ev.preventDefault();
   const section = ev.target.dataset.section;
   const fd = new FormData(ev.target);
-  const item = {
+  const cobro = Number(fd.get('cobro') || 0);
+  const pagado = fd.get('pagado') === 'si';
+  const item = normalizeTripLine({
     id: uid(),
     cliente: String(fd.get('cliente') || '').trim(),
     detalle: String(fd.get('detalle') || '').trim(),
-    cobro: Number(fd.get('cobro') || 0),
-    pagado: fd.get('pagado') === 'si',
-  };
+    cobro,
+    cobradoActual: pagado ? cobro : 0,
+    pagos: pagado && cobro > 0 ? [{ id: uid(), fecha: today(), monto: cobro, texto: 'Pago inicial completo' }] : [],
+  });
   if (!item.cliente && !item.detalle) return;
   currentTrip()[section].unshift(item);
   if (item.cliente && !(state.clientesFrecuentes || []).some((c) => norm(c.nombre) === norm(item.cliente))) {
@@ -728,24 +774,62 @@ function addTripLineFromForm(ev) {
 function editTripLine(section, id) {
   const item = currentTrip()[section].find((x) => x.id === id);
   if (!item) return;
+  normalizeTripLine(item);
   const cliente = prompt('Cliente:', item.cliente || '');
   if (cliente === null) return;
   const detalle = prompt('Detalle:', item.detalle || '');
   if (detalle === null) return;
-  const cobro = prompt('Cobro:', item.cobro);
+  const cobro = prompt('Total a cobrar:', item.cobro);
   if (cobro === null) return;
-  const pagado = prompt('¿Pagado? Escribí si o no:', item.pagado ? 'si' : 'no');
-  if (pagado === null) return;
-  Object.assign(item, { cliente: cliente.trim(), detalle: detalle.trim(), cobro: Number(cobro || 0), pagado: norm(pagado) !== 'no' });
+  const cobradoActual = prompt('Ya cobrado en este viaje:', item.cobradoActual || 0);
+  if (cobradoActual === null) return;
+  item.cliente = cliente.trim();
+  item.detalle = detalle.trim();
+  item.cobro = Number(cobro || 0);
+  item.cobradoActual = Math.max(0, Math.min(Number(cobradoActual || 0), Number(item.cobro || 0)));
+  item.pagado = item.cobradoActual >= item.cobro;
   if (item.cliente && !(state.clientesFrecuentes || []).some((c) => norm(c.nombre) === norm(item.cliente))) {
     state.clientesFrecuentes.unshift({ id: uid(), nombre: item.cliente, telefono: '', notas: '' });
   }
   render();
 }
+function registerTripItemPayment(section, id) {
+  const item = currentTrip()[section].find((x) => x.id === id);
+  if (!item) return;
+  normalizeTripLine(item);
+  const amounts = lineAmounts(item);
+  const amount = prompt(`Monto que pagó ahora:
+Pendiente actual: ${money(amounts.pendiente)}`, String(amounts.pendiente));
+  if (amount === null) return;
+  const m = Number(amount || 0);
+  if (!m) return;
+  const aplicado = Math.max(0, Math.min(m, amounts.pendiente));
+  item.cobradoActual = amounts.cobrado + aplicado;
+  item.pagado = item.cobradoActual >= item.cobro;
+  item.pagos.unshift({ id: uid(), fecha: today(), monto: aplicado, texto: 'Pago durante viaje' });
+  render();
+}
+function resetTripItemPayment(section, id) {
+  const item = currentTrip()[section].find((x) => x.id === id);
+  if (!item) return;
+  if (!confirm('¿Volver este registro a pendiente y resetear lo cobrado en el viaje?')) return;
+  item.cobradoActual = 0;
+  item.pagado = false;
+  item.pagos = [];
+  render();
+}
 function toggleTripItemPaid(section, id) {
   const item = currentTrip()[section].find((x) => x.id === id);
   if (!item) return;
-  item.pagado = !item.pagado;
+  normalizeTripLine(item);
+  const amounts = lineAmounts(item);
+  if (amounts.pendiente > 0) {
+    item.cobradoActual = amounts.total;
+    item.pagado = true;
+  } else {
+    item.cobradoActual = 0;
+    item.pagado = false;
+  }
   render();
 }
 function removeTripItem(section, id) {
@@ -892,7 +976,7 @@ function closeTrip() {
     ...(trip.pedidosTransferencia || []).map((i) => ({ ...i, origen: 'Transferencia' })),
     ...(trip.pedidosConSobre || []).map((i) => ({ ...i, origen: 'Sobre' })),
     ...(trip.pedidosProvincia || []).map((i) => ({ ...i, origen: 'Provincia' })),
-  ].filter((i) => !i.pagado && Number(i.cobro || 0) > 0);
+  ].map((i) => ({ ...normalizeTripLine(i), __amounts: lineAmounts(i) })).filter((i) => i.__amounts.pendiente > 0);
 
   const summaryText = generateTripSummaryText(trip);
   const estado = metrics.totalPendiente > 0 ? 'cerrado con deuda' : 'cerrado completo';
@@ -914,11 +998,11 @@ function closeTrip() {
   allDebtLines.forEach((i) => {
     debtors = mergeDebtors(debtors, {
       nombre: i.cliente || 'Sin nombre',
-      saldo: Number(i.cobro || 0),
+      saldo: Number(i.__amounts.pendiente || 0),
       itemsPendientes: 1,
       ultimoViaje: trip.fecha,
       detalle: `${i.origen}${i.detalle ? ` · ${i.detalle}` : ''}`,
-      historial: [{ id: uid(), fecha: today(), monto: Number(i.cobro || 0), texto: `Sumado desde viaje ${trip.fecha}` }],
+      historial: [{ id: uid(), fecha: today(), monto: Number(i.__amounts.pendiente || 0), texto: `Sumado desde viaje ${trip.fecha}` }],
     });
   });
 
@@ -977,7 +1061,11 @@ function setClientPaidStatus(clientName, paid) {
   const trip = currentTrip();
   ['pasajeros', 'pedidosTransferencia', 'pedidosConSobre', 'pedidosProvincia'].forEach((section) => {
     (trip[section] || []).forEach((item) => {
-      if (norm(item.cliente) === norm(clientName)) item.pagado = !!paid;
+      if (norm(item.cliente) === norm(clientName)) {
+        normalizeTripLine(item);
+        item.cobradoActual = paid ? Number(item.cobro || 0) : 0;
+        item.pagado = !!paid;
+      }
     });
   });
   render();
@@ -1050,6 +1138,8 @@ window.removeCommitment = removeCommitment;
 window.editMovement = editMovement;
 window.removeMovement = removeMovement;
 window.toggleTripItemPaid = toggleTripItemPaid;
+window.registerTripItemPayment = registerTripItemPayment;
+window.resetTripItemPayment = resetTripItemPayment;
 window.editTripLine = editTripLine;
 window.removeTripItem = removeTripItem;
 window.editTripExpense = editTripExpense;
