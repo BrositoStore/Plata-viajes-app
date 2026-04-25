@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v1';
+const STORAGE_KEY = 'plata-viajes-pwa-v2';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -100,6 +100,54 @@ function emptyHtml(text) {
 
 function statusBadge(text) {
   return `<span class="badge-status">${text}</span>`;
+}
+
+function clientTripSummaryText(clientName, trip = currentTrip()) {
+  const groups = buildTripClientSummary(trip);
+  const g = groups.find((x) => norm(x.cliente) === norm(clientName));
+  if (!g) return `${clientName}: sin datos en este viaje`;
+  const detailParts = [];
+  if (g.counts.Pasajeros) detailParts.push(`${g.counts.Pasajeros} pasaj.`);
+  if (g.counts.Transferencia) detailParts.push(`${g.counts.Transferencia} transf.`);
+  if (g.counts.Sobres) detailParts.push(`${g.counts.Sobres} sobres`);
+  if (g.counts.Provincia) detailParts.push(`${g.counts.Provincia} prov.`);
+  return [
+    `Cliente: ${g.cliente}`,
+    `Ítems: ${g.totalItems}`,
+    `Detalle: ${detailParts.join(' · ') || 'Sin detalle'}`,
+    `Facturado: ${money(g.facturado)}`,
+    `Cobrado: ${money(g.cobrado)}`,
+    `Pendiente: ${money(g.pendiente)}`,
+  ].join('\n');
+}
+
+function getClientAnalytics(name) {
+  const analytics = {
+    viajes: 0,
+    items: 0,
+    facturado: 0,
+    cobrado: 0,
+    pendienteActual: 0,
+  };
+  const seenTrips = new Set();
+  (state.historialViajes || []).forEach((trip) => {
+    ['pasajeros', 'pedidosTransferencia', 'pedidosConSobre', 'pedidosProvincia'].forEach((section) => {
+      (trip[section] || []).forEach((item) => {
+        if (norm(item.cliente) !== norm(name)) return;
+        analytics.items += 1;
+        analytics.facturado += Number(item.cobro || 0);
+        if (item.pagado) analytics.cobrado += Number(item.cobro || 0);
+        if (!seenTrips.has(trip.id)) {
+          seenTrips.add(trip.id);
+          analytics.viajes += 1;
+        }
+      });
+    });
+  });
+  (state.deudores || []).forEach((d) => {
+    if (norm(d.nombre) === norm(name)) analytics.pendienteActual += Number(d.saldo || 0);
+  });
+  return analytics;
 }
 
 function buildTripClientSummary(trip) {
@@ -340,15 +388,18 @@ function renderViajes() {
     if (g.counts.Transferencia) detailParts.push(`${g.counts.Transferencia} transf.`);
     if (g.counts.Sobres) detailParts.push(`${g.counts.Sobres} sobres`);
     if (g.counts.Provincia) detailParts.push(`${g.counts.Provincia} prov.`);
+    const safeName = g.cliente.replace(/'/g, "\\'");
     tripClientsSummary.insertAdjacentHTML('beforeend', `
       <div class="row">
         <div>
           <div class="title">${g.cliente}</div>
           <div class="sub">${detailParts.join(' · ') || 'Sin detalle'} · ${g.totalItems} ítems</div>
+          <div class="meta">Cobró ${money(g.cobrado)} / Debe ${money(g.pendiente)}</div>
         </div>
         <div class="row-actions">
           <div class="amount">${money(g.facturado)}</div>
-          <div class="sub">Cobró ${money(g.cobrado)} / Debe ${money(g.pendiente)}</div>
+          <button class="secondary small" onclick="copyClientTripSummary('${safeName}')">Copiar</button>
+          ${g.pendiente > 0 ? `<button class="secondary small" onclick="setClientPaidStatus('${safeName}', true)">Marcar todo pagado</button>` : `<button class="secondary small" onclick="setClientPaidStatus('${safeName}', false)">Poner debe</button>`}
         </div>
       </div>
     `);
@@ -430,13 +481,16 @@ function renderClients() {
   const clients = (state.clientesFrecuentes || []).filter((c) => !q || [c.nombre, c.telefono, c.notas].join(' ').toLowerCase().includes(q));
   list.innerHTML = clients.length ? '' : emptyHtml('No hay clientes cargados.');
   clients.forEach((c) => {
+    const stats = getClientAnalytics(c.nombre);
     list.insertAdjacentHTML('beforeend', `
       <div class="row">
         <div>
           <div class="title">${c.nombre}</div>
           <div class="sub">${c.telefono || 'Sin teléfono'}${c.notas ? ` · ${c.notas}` : ''}</div>
+          <div class="meta">Viajes: ${stats.viajes} · Ítems: ${stats.items} · Facturado: ${money(stats.facturado)} · Debe hoy: ${money(stats.pendienteActual)}</div>
         </div>
         <div class="row-actions">
+          <button class="secondary small" onclick="copyClientHistorySummary('${c.id}')">Copiar ficha</button>
           <button class="secondary small" onclick="editClient('${c.id}')">Editar</button>
           <button class="secondary small" onclick="removeClient('${c.id}')">Borrar</button>
         </div>
@@ -446,9 +500,11 @@ function renderClients() {
 }
 
 function renderDebtors() {
+  const q = norm(document.getElementById('debtorSearch')?.value || '');
   const list = document.getElementById('debtorsList');
-  list.innerHTML = (state.deudores || []).length ? '' : emptyHtml('No hay deudores activos.');
-  (state.deudores || []).forEach((d) => {
+  const debtors = (state.deudores || []).filter((d) => !q || [d.nombre, d.detalle].join(' ').toLowerCase().includes(q));
+  list.innerHTML = debtors.length ? '' : emptyHtml('No hay deudores activos.');
+  debtors.forEach((d) => {
     const history = (d.historial || []).map((h) => `
       <div class="row">
         <div>
@@ -819,6 +875,18 @@ function removeDebtor(id) {
 function closeTrip() {
   const trip = currentTrip();
   const metrics = getTripMetrics(trip);
+  const preview = [
+    `Fecha: ${trip.fecha}`,
+    `Facturado: ${money(metrics.totalFacturado)}`,
+    `Cobrado: ${money(metrics.totalCobrado)}`,
+    `Pendiente: ${money(metrics.totalPendiente)}`,
+    `Gastos: ${money(metrics.totalGastos)}`,
+    `Ganancia contable: ${money(metrics.gananciaContable)}`,
+    `Caja neta real: ${money(metrics.cajaNetaReal)}`,
+    '',
+    '¿Cerrar viaje con estos datos?'
+  ].join('\n');
+  if (!confirm(preview)) return;
   const allDebtLines = [
     ...(trip.pasajeros || []).map((i) => ({ ...i, origen: 'Pasajero' })),
     ...(trip.pedidosTransferencia || []).map((i) => ({ ...i, origen: 'Transferencia' })),
@@ -885,7 +953,8 @@ function backupData() {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = `backup-plata-viajes-${state.currentMonth}.json`;
+  const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+  link.download = `backup-plata-viajes-${state.currentMonth}-${stamp}.json`;
   link.click();
 }
 function importData(file) {
@@ -901,6 +970,39 @@ function importData(file) {
     }
   };
   reader.readAsText(file);
+}
+
+
+function setClientPaidStatus(clientName, paid) {
+  const trip = currentTrip();
+  ['pasajeros', 'pedidosTransferencia', 'pedidosConSobre', 'pedidosProvincia'].forEach((section) => {
+    (trip[section] || []).forEach((item) => {
+      if (norm(item.cliente) === norm(clientName)) item.pagado = !!paid;
+    });
+  });
+  render();
+}
+
+function copyClientTripSummary(clientName) {
+  const text = clientTripSummaryText(clientName);
+  navigator.clipboard.writeText(text).then(() => alert('Resumen del cliente copiado.'));
+}
+
+function copyClientHistorySummary(id) {
+  const c = (state.clientesFrecuentes || []).find((x) => x.id === id);
+  if (!c) return;
+  const stats = getClientAnalytics(c.nombre);
+  const text = [
+    `Cliente: ${c.nombre}`,
+    `Teléfono: ${c.telefono || '-'}`,
+    `Notas: ${c.notas || '-'}`,
+    `Viajes registrados: ${stats.viajes}`,
+    `Ítems registrados: ${stats.items}`,
+    `Facturado histórico: ${money(stats.facturado)}`,
+    `Cobrado histórico: ${money(stats.cobrado)}`,
+    `Saldo activo actual: ${money(stats.pendienteActual)}`,
+  ].join('\n');
+  navigator.clipboard.writeText(text).then(() => alert('Ficha del cliente copiada.'));
 }
 
 function wireEvents() {
@@ -934,6 +1036,8 @@ function wireEvents() {
 
   document.getElementById('clientForm').addEventListener('submit', addClientFromForm);
   document.getElementById('clientSearch').addEventListener('input', render);
+  const debtorSearch = document.getElementById('debtorSearch');
+  if (debtorSearch) debtorSearch.addEventListener('input', render);
   document.getElementById('manualDebtorForm').addEventListener('submit', addManualDebtorFromForm);
 }
 
@@ -956,6 +1060,9 @@ window.removeClient = removeClient;
 window.editDebtor = editDebtor;
 window.payDebtor = payDebtor;
 window.removeDebtor = removeDebtor;
+window.setClientPaidStatus = setClientPaidStatus;
+window.copyClientTripSummary = copyClientTripSummary;
+window.copyClientHistorySummary = copyClientHistorySummary;
 window.copyTripHistorySummary = copyTripHistorySummary;
 window.removeTripHistory = removeTripHistory;
 

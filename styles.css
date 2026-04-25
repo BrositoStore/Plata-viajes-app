@@ -251,3 +251,5 @@ h1 { margin: 4px 0; font-size: clamp(28px, 5vw, 40px); }
   .row { flex-direction: column; }
   .row-actions { justify-content: start; }
 }
+
+.card.inner .row .meta{max-width:680px}
