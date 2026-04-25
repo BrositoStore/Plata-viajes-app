@@ -477,3 +477,13 @@ h1 {
   .row .amount { align-self: flex-start; }
 }
 .card.inner .row .meta { max-width: 720px; }
+
+.assistant-help{color:var(--muted);margin-bottom:10px;line-height:1.45}
+.assistant-examples{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.assistant-bar{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start}
+.assistant-actions{display:flex;flex-direction:column;gap:8px;min-width:130px}
+.assistant-feedback{margin-top:12px;padding:12px 14px;border-radius:16px;background:rgba(255,255,255,.78);border:1px solid var(--border);color:var(--muted);min-height:48px;display:flex;align-items:center}
+.assistant-feedback.ok{background:var(--primary-softer);border-color:var(--border-strong);color:var(--primary-strong)}
+.assistant-feedback.error{background:#fff7ed;border-color:#fdba74;color:#9a3412}
+.meta{font-size:12px;color:var(--muted);margin-top:4px}
+@media (max-width: 860px){.assistant-bar{grid-template-columns:1fr}.assistant-actions{flex-direction:row;min-width:0}}

@@ -85,3 +85,8 @@ Versión v4:
 - En cada cliente del viaje ya no se elige solo 'Pagado' o 'Debe'.
 - Ahora podés cargar directamente un pago parcial inicial en el campo 'Pago parcial / cobrado ahora'.
 - El sistema calcula solo cobrado, pendiente y estado.
+
+
+Versión v6:
+- pedidos unificados en una sola sección
+- asistente rápido por texto/voz para comandos comunes

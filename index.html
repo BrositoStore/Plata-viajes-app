@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Plata + Viajes</title>
   <meta name="theme-color" content="#14532d" />
-  <meta name="description" content="Base de datos personal para plata, viajes, clientes y deudores." />
+  <meta name="description" content="Base de datos personal para plata, viajes, clientes, deudores y asistente rápido." />
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
@@ -17,7 +17,7 @@
       <div>
         <div class="eyebrow">App personal</div>
         <h1>Plata + Viajes</h1>
-        <p class="subtle">Base de datos personal para plata, viajes, clientes y deudores.</p>
+        <p class="subtle">Base de datos personal para plata, viajes, clientes, deudores y asistente rápido.</p>
       </div>
       <div class="top-actions">
         <label class="compact">
@@ -104,6 +104,33 @@
           </div>
         </div>
 
+        
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Asistente rápido</h2>
+            <span class="pill">texto / voz</span>
+          </div>
+          <div class="card-body">
+            <div class="assistant-help">Escribile o dictale cambios rápidos. Entiende mejor comandos cortos y claros.</div>
+            <div class="assistant-examples">
+              <span class="chip">gasto combustible | 40000 | YPF</span>
+              <span class="chip">pedido Micaela Noguera | 3 pedidos | 42000 | 10000</span>
+              <span class="chip">pasajero Rubén | Flores | 60000 | 0</span>
+              <span class="chip">Micaela pagó 12000</span>
+              <span class="chip">cerrar viaje</span>
+            </div>
+            <div class="assistant-bar">
+              <textarea id="assistantInput" rows="3" placeholder="Ejemplo: pedido Micaela Noguera | 3 pedidos | 42000 | 10000"></textarea>
+              <div class="assistant-actions">
+                <button id="assistantRunBtn">Procesar</button>
+                <button id="assistantVoiceBtn" class="secondary" type="button">Hablar</button>
+              </div>
+            </div>
+            <div id="assistantFeedback" class="assistant-feedback"></div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-head">
             <h2>Viaje actual</h2>
@@ -139,9 +166,9 @@
               </div>
 
               <div class="card inner">
-                <div class="card-head"><h3>Pedidos por transferencia</h3></div>
+                <div class="card-head"><h3>Pedidos</h3></div>
                 <div class="card-body">
-                  <form id="formTransfer" class="trip-line-form" data-section="pedidosTransferencia" data-list="clientList2">
+                  <form id="formPedidos" class="trip-line-form" data-section="pedidos" data-list="clientList2">
                     <input name="cliente" list="clientList2" placeholder="Cliente" />
                     <datalist id="clientList2"></datalist>
                     <input name="detalle" placeholder="Cantidad / detalle" />
@@ -149,37 +176,7 @@
                     <input name="cobradoInicial" type="number" placeholder="Pago parcial / cobrado ahora" />
                     <button type="submit">Agregar</button>
                   </form>
-                  <div id="listTransfer" class="list"></div>
-                </div>
-              </div>
-
-              <div class="card inner">
-                <div class="card-head"><h3>Pedidos con sobre</h3></div>
-                <div class="card-body">
-                  <form id="formSobres" class="trip-line-form" data-section="pedidosConSobre" data-list="clientList3">
-                    <input name="cliente" list="clientList3" placeholder="Cliente" />
-                    <datalist id="clientList3"></datalist>
-                    <input name="detalle" placeholder="Cantidad / detalle" />
-                    <input name="cobro" type="number" placeholder="Total a cobrar" />
-                    <input name="cobradoInicial" type="number" placeholder="Pago parcial / cobrado ahora" />
-                    <button type="submit">Agregar</button>
-                  </form>
-                  <div id="listSobres" class="list"></div>
-                </div>
-              </div>
-
-              <div class="card inner">
-                <div class="card-head"><h3>Pedidos en provincia</h3></div>
-                <div class="card-body">
-                  <form id="formProvincia" class="trip-line-form" data-section="pedidosProvincia" data-list="clientList4">
-                    <input name="cliente" list="clientList4" placeholder="Cliente" />
-                    <datalist id="clientList4"></datalist>
-                    <input name="detalle" placeholder="Localidad / detalle" />
-                    <input name="cobro" type="number" placeholder="Total a cobrar" />
-                    <input name="cobradoInicial" type="number" placeholder="Pago parcial / cobrado ahora" />
-                    <button type="submit">Agregar</button>
-                  </form>
-                  <div id="listProvincia" class="list"></div>
+                  <div id="listPedidos" class="list"></div>
                 </div>
               </div>
             </div>

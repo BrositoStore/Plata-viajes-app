@@ -37,7 +37,8 @@ function normalizeTripLine(item) {
 
 function normalizeTrip(trip) {
   if (!trip) return trip;
-  ['pasajeros', 'pedidosTransferencia', 'pedidosConSobre', 'pedidosProvincia'].forEach((section) => {
+  migrateTripToUnifiedPedidos(trip);
+  ['pasajeros', 'pedidos'].forEach((section) => {
     trip[section] = (trip[section] || []).map((item) => normalizeTripLine(item));
   });
   return trip;
@@ -48,9 +49,7 @@ const emptyTrip = () => ({
   fecha: today(),
   notas: '',
   pasajeros: [],
-  pedidosTransferencia: [],
-  pedidosConSobre: [],
-  pedidosProvincia: [],
+  pedidos: [],
   gastos: [],
 });
 
@@ -81,6 +80,35 @@ const initialState = () => {
   };
 };
 
+function migrateTripToUnifiedPedidos(trip) {
+  if (!trip) return trip;
+  if (!Array.isArray(trip.pedidos)) {
+    trip.pedidos = [];
+    ['pedidosTransferencia', 'pedidosConSobre', 'pedidosProvincia'].forEach((key) => {
+      (trip[key] || []).forEach((item) => trip.pedidos.push(item));
+    });
+  }
+  delete trip.pedidosTransferencia;
+  delete trip.pedidosConSobre;
+  delete trip.pedidosProvincia;
+  if (!Array.isArray(trip.pasajeros)) trip.pasajeros = [];
+  if (!Array.isArray(trip.gastos)) trip.gastos = [];
+  if (!trip.fecha) trip.fecha = today();
+  if (!Object.prototype.hasOwnProperty.call(trip, 'notas')) trip.notas = '';
+  return trip;
+}
+
+function migrateState(parsed) {
+  if (!parsed || typeof parsed !== 'object') return initialState();
+  if (!parsed.tripExpenseCategories) parsed.tripExpenseCategories = ['Combustible', 'Peajes', 'Comida', 'Cadetería', 'Cochera', 'Repuestos', 'Otros'];
+  if (!parsed.clientesFrecuentes) parsed.clientesFrecuentes = [];
+  if (!parsed.deudores) parsed.deudores = [];
+  if (!parsed.compromisos) parsed.compromisos = [];
+  parsed.viajeActual = migrateTripToUnifiedPedidos(parsed.viajeActual || emptyTrip());
+  parsed.historialViajes = (parsed.historialViajes || []).map((t) => migrateTripToUnifiedPedidos(t));
+  return parsed;
+}
+
 let state = loadState();
 normalizeTrip(state.viajeActual);
 (state.historialViajes || []).forEach(normalizeTrip);
@@ -90,10 +118,10 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return initialState();
     const parsed = JSON.parse(raw);
-    return parsed;
+    return migrateState(parsed);
   } catch (e) {
     console.error(e);
-    return initialState();
+    return migrateState(initialState());
   }
 }
 
@@ -146,9 +174,7 @@ function clientTripSummaryText(clientName, trip = currentTrip()) {
   if (!g) return `${clientName}: sin datos en este viaje`;
   const detailParts = [];
   if (g.counts.Pasajeros) detailParts.push(`${g.counts.Pasajeros} pasaj.`);
-  if (g.counts.Transferencia) detailParts.push(`${g.counts.Transferencia} transf.`);
-  if (g.counts.Sobres) detailParts.push(`${g.counts.Sobres} sobres`);
-  if (g.counts.Provincia) detailParts.push(`${g.counts.Provincia} prov.`);
+  if (g.counts.Pedidos) detailParts.push(`${g.counts.Pedidos} pedidos`);
   return [
     `Cliente: ${g.cliente}`,
     `Ítems: ${g.totalItems}`,
@@ -169,7 +195,8 @@ function getClientAnalytics(name) {
   };
   const seenTrips = new Set();
   (state.historialViajes || []).forEach((trip) => {
-    ['pasajeros', 'pedidosTransferencia', 'pedidosConSobre', 'pedidosProvincia'].forEach((section) => {
+    migrateTripToUnifiedPedidos(trip);
+  ['pasajeros', 'pedidos'].forEach((section) => {
       (trip[section] || []).forEach((rawItem) => {
         const item = normalizeTripLine(rawItem);
         if (norm(item.cliente) !== norm(name)) return;
@@ -194,9 +221,7 @@ function buildTripClientSummary(trip) {
   const groups = {};
   const sections = [
     ['pasajeros', 'Pasajeros'],
-    ['pedidosTransferencia', 'Transferencia'],
-    ['pedidosConSobre', 'Sobres'],
-    ['pedidosProvincia', 'Provincia'],
+    ['pedidos', 'Pedidos'],
   ];
   sections.forEach(([key, label]) => {
     (trip[key] || []).forEach((rawItem) => {
@@ -207,7 +232,7 @@ function buildTripClientSummary(trip) {
         groups[name] = {
           cliente: name,
           totalItems: 0,
-          counts: { Pasajeros: 0, Transferencia: 0, Sobres: 0, Provincia: 0 },
+          counts: { Pasajeros: 0, Pedidos: 0 },
           facturado: 0,
           cobrado: 0,
           pendiente: 0,
@@ -228,9 +253,7 @@ function buildTripClientSummary(trip) {
 function generateTripSummaryText(trip) {
   const allLines = [
     ...(trip.pasajeros || []),
-    ...(trip.pedidosTransferencia || []),
-    ...(trip.pedidosConSobre || []),
-    ...(trip.pedidosProvincia || []),
+    ...(trip.pedidos || []),
   ].map(normalizeTripLine);
   const totalFacturado = allLines.reduce((a, i) => a + lineAmounts(i).total, 0);
   const totalCobrado = allLines.reduce((a, i) => a + lineAmounts(i).cobrado, 0);
@@ -394,9 +417,7 @@ function renderViajes() {
   ].join('');
 
   renderTripSection('pasajeros', 'listPasajeros');
-  renderTripSection('pedidosTransferencia', 'listTransfer');
-  renderTripSection('pedidosConSobre', 'listSobres');
-  renderTripSection('pedidosProvincia', 'listProvincia');
+  renderTripSection('pedidos', 'listPedidos');
 
   const tripExpensesList = document.getElementById('tripExpensesList');
   tripExpensesList.innerHTML = (trip.gastos || []).length ? '' : emptyHtml('Sin gastos cargados.');
@@ -428,9 +449,7 @@ function renderViajes() {
   groups.forEach((g) => {
     const detailParts = [];
     if (g.counts.Pasajeros) detailParts.push(`${g.counts.Pasajeros} pasaj.`);
-    if (g.counts.Transferencia) detailParts.push(`${g.counts.Transferencia} transf.`);
-    if (g.counts.Sobres) detailParts.push(`${g.counts.Sobres} sobres`);
-    if (g.counts.Provincia) detailParts.push(`${g.counts.Provincia} prov.`);
+    if (g.counts.Pedidos) detailParts.push(`${g.counts.Pedidos} pedidos`);
     const safeName = g.cliente.replace(/'/g, "\\'");
     tripClientsSummary.insertAdjacentHTML('beforeend', `
       <div class="row">
@@ -584,9 +603,7 @@ function renderDebtors() {
 function getTripMetrics(trip) {
   const allLines = [
     ...(trip.pasajeros || []),
-    ...(trip.pedidosTransferencia || []),
-    ...(trip.pedidosConSobre || []),
-    ...(trip.pedidosProvincia || []),
+    ...(trip.pedidos || []),
   ].map(normalizeTripLine);
   const totalFacturado = allLines.reduce((a, i) => a + lineAmounts(i).total, 0);
   const totalCobrado = allLines.reduce((a, i) => a + lineAmounts(i).cobrado, 0);
@@ -975,9 +992,7 @@ function closeTrip() {
   if (!confirm(preview)) return;
   const allDebtLines = [
     ...(trip.pasajeros || []).map((i) => ({ ...i, origen: 'Pasajero' })),
-    ...(trip.pedidosTransferencia || []).map((i) => ({ ...i, origen: 'Transferencia' })),
-    ...(trip.pedidosConSobre || []).map((i) => ({ ...i, origen: 'Sobre' })),
-    ...(trip.pedidosProvincia || []).map((i) => ({ ...i, origen: 'Provincia' })),
+    ...(trip.pedidos || []).map((i) => ({ ...i, origen: 'Pedido' })),
   ].map((i) => ({ ...normalizeTripLine(i), __amounts: lineAmounts(i) })).filter((i) => i.__amounts.pendiente > 0);
 
   const summaryText = generateTripSummaryText(trip);
@@ -1061,7 +1076,8 @@ function importData(file) {
 
 function setClientPaidStatus(clientName, paid) {
   const trip = currentTrip();
-  ['pasajeros', 'pedidosTransferencia', 'pedidosConSobre', 'pedidosProvincia'].forEach((section) => {
+  migrateTripToUnifiedPedidos(trip);
+  ['pasajeros', 'pedidos'].forEach((section) => {
     (trip[section] || []).forEach((item) => {
       if (norm(item.cliente) === norm(clientName)) {
         normalizeTripLine(item);
@@ -1129,6 +1145,12 @@ function wireEvents() {
   const debtorSearch = document.getElementById('debtorSearch');
   if (debtorSearch) debtorSearch.addEventListener('input', render);
   document.getElementById('manualDebtorForm').addEventListener('submit', addManualDebtorFromForm);
+  const assistantRunBtn = document.getElementById('assistantRunBtn');
+  if (assistantRunBtn) assistantRunBtn.addEventListener('click', () => processAssistantCommand(document.getElementById('assistantInput').value));
+  const assistantInput = document.getElementById('assistantInput');
+  if (assistantInput) assistantInput.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') processAssistantCommand(e.target.value); });
+  const assistantVoiceBtn = document.getElementById('assistantVoiceBtn');
+  if (assistantVoiceBtn) assistantVoiceBtn.addEventListener('click', toggleAssistantVoice);
 }
 
 window.toggleFixedPaid = toggleFixedPaid;
