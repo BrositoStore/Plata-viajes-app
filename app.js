@@ -124,6 +124,19 @@ function migrateState(parsed) {
   if (!parsed.auditLog) parsed.auditLog = [];
   if (!parsed.monthClosures) parsed.monthClosures = [];
   if (!parsed.lastBackupAt) parsed.lastBackupAt = '';
+  if (!parsed.currentMonth) parsed.currentMonth = monthKeyNow();
+  if (!parsed.months || typeof parsed.months !== 'object') parsed.months = { [parsed.currentMonth]: baseMonth() };
+  Object.keys(parsed.months).forEach((key) => {
+    const month = parsed.months[key] || {};
+    month.movimientos = Array.isArray(month.movimientos) ? month.movimientos : [];
+    month.gastosFijos = sortFixedExpensesList((Array.isArray(month.gastosFijos) ? month.gastosFijos : []).map((g) => ({
+      id: g.id || uid(),
+      nombre: String(g.nombre || ''),
+      monto: parseAmountInput(g.monto || 0),
+      pagado: !!g.pagado,
+    })));
+    parsed.months[key] = month;
+  });
   parsed.viajeActual = migrateTripToUnifiedPedidos(parsed.viajeActual || emptyTrip());
   parsed.historialViajes = (parsed.historialViajes || []).map((t) => migrateTripToUnifiedPedidos(t));
   return parsed;
@@ -321,13 +334,21 @@ function saveState() {
 }
 
 function cloneFixedExpenses(sourceMonth) {
-  return (sourceMonth?.gastosFijos || []).map((g) => ({
+  return sortFixedExpensesList((sourceMonth?.gastosFijos || []).map((g) => ({
     ...g,
     id: uid(),
     nombre: String(g.nombre || ''),
     monto: parseAmountInput(g.monto ?? 0),
     pagado: false,
-  }));
+  })));
+}
+
+function sortFixedExpensesList(items) {
+  return [...(items || [])].sort((a, b) => {
+    const diff = Number(b?.monto || 0) - Number(a?.monto || 0);
+    if (diff !== 0) return diff;
+    return String(a?.nombre || '').localeCompare(String(b?.nombre || ''), 'es', { sensitivity: 'base' });
+  });
 }
 
 function hasMeaningfulFixedExpenses(month) {
@@ -852,8 +873,9 @@ function renderPlata() {
   document.getElementById('monthPicker').value = state.currentMonth;
 
   const fixedList = document.getElementById('fixedList');
-  fixedList.innerHTML = (month.gastosFijos || []).length ? '' : emptyHtml('No hay gastos fijos cargados.');
-  (month.gastosFijos || []).forEach((g) => {
+  const sortedFixedExpenses = sortFixedExpensesList(month.gastosFijos || []);
+  fixedList.innerHTML = sortedFixedExpenses.length ? '' : emptyHtml('No hay gastos fijos cargados.');
+  sortedFixedExpenses.forEach((g) => {
     fixedList.insertAdjacentHTML('beforeend', `
       <div class="row">
         <div>
@@ -1175,9 +1197,53 @@ function bindFormDefaults() {
   if (movementDate && !movementDate.value) movementDate.value = today();
 }
 
+function updateCommitmentFormMode() {
+  const form = document.getElementById('commitmentForm');
+  if (!form) return;
+  const tipo = form.querySelector('[name="tipo"]').value;
+  const saldo = document.getElementById('commitmentSaldoInput');
+  const total = document.getElementById('commitmentTotalInput');
+  const cuota = document.getElementById('commitmentCuotaInput');
+  const cuotas = document.getElementById('commitmentCuotasInput');
+  const hint = document.getElementById('commitmentHint');
+  const isSaldo = tipo === 'saldo';
+
+  if (saldo) { saldo.classList.toggle('hidden', !isSaldo); saldo.disabled = !isSaldo; }
+  if (total) { total.classList.toggle('hidden', isSaldo); total.disabled = isSaldo; }
+  if (cuota) { cuota.classList.toggle('hidden', isSaldo); cuota.disabled = isSaldo; }
+  if (cuotas) { cuotas.classList.toggle('hidden', isSaldo); cuotas.disabled = isSaldo; }
+
+  if (!hint) return;
+  if (isSaldo) {
+    hint.textContent = 'En saldo pendiente cargás solo el saldo total. Después vas descontando pagos libremente.';
+  } else {
+    updateCommitmentHint();
+  }
+}
+
+function updateCommitmentHint() {
+  const form = document.getElementById('commitmentForm');
+  const hint = document.getElementById('commitmentHint');
+  if (!form || !hint) return;
+  const tipo = form.querySelector('[name="tipo"]').value;
+  if (tipo !== 'cuotas') {
+    hint.textContent = 'En saldo pendiente cargás solo el saldo total. Después vas descontando pagos libremente.';
+    return;
+  }
+  const total = parseAmountInput(form.querySelector('[name="totalCompromiso"]').value || 0);
+  const cuota = parseAmountInput(form.querySelector('[name="montoCuota"]').value || 0);
+  const cuotas = Number(form.querySelector('[name="cuotasRestantes"]').value || 0);
+  if (!cuota && total && cuotas > 0) {
+    const autoCuota = Math.round(total / cuotas);
+    hint.textContent = `En cuotas podés cargar el monto de cada cuota, o dejarlo vacío y poner total + cuotas para que se calcule solo. Cuota estimada: ${money(autoCuota)}.`;
+  } else {
+    hint.textContent = 'En cuotas podés cargar el monto de cada cuota, o dejarlo vacío y poner total + cuotas para que se calcule solo.';
+  }
+}
+
 function addFixed() {
   markCurrentMonthFixedCustomized();
-  currentMonthData().gastosFijos.push({ id: uid(), nombre: 'Nuevo gasto', monto: 0, pagado: false });
+  currentMonthData().gastosFijos = sortFixedExpensesList([...(currentMonthData().gastosFijos || []), { id: uid(), nombre: 'Nuevo gasto', monto: 0, pagado: false }]);
   logAction('plata', 'Se agregó un gasto fijo');
   render();
 }
@@ -1219,13 +1285,17 @@ function addCommitmentFromForm(ev) {
     if (!saldoPendiente) return;
     state.compromisos.unshift({ id: uid(), tipo, nombre, saldoPendiente, historial: [] });
   } else {
-    const montoCuota = parseAmountInput(fd.get('montoCuota') || 0);
+    const totalCompromiso = parseAmountInput(fd.get('totalCompromiso') || 0);
+    let montoCuota = parseAmountInput(fd.get('montoCuota') || 0);
     const cuotasRestantes = Number(fd.get('cuotasRestantes') || 0);
-    if (!montoCuota || !cuotasRestantes) return;
-    state.compromisos.unshift({ id: uid(), tipo, nombre, montoCuota, cuotasRestantes, historial: [] });
+    if (!cuotasRestantes) return;
+    if (!montoCuota && totalCompromiso) montoCuota = Math.round(totalCompromiso / cuotasRestantes);
+    if (!montoCuota) return;
+    state.compromisos.unshift({ id: uid(), tipo, nombre, totalCompromiso: totalCompromiso || montoCuota * cuotasRestantes, montoCuota, cuotasRestantes, historial: [] });
   }
-  logAction('viaje', `Se agregó ${section === 'pasajeros' ? 'pasajero' : 'pedido'} ${item.cliente || item.detalle} por ${money(item.cobro)}`);
+  logAction('plata', `Se agregó compromiso ${nombre}`);
   ev.target.reset();
+  updateCommitmentFormMode();
   render();
 }
 function editCommitment(id) {
@@ -1239,12 +1309,17 @@ function editCommitment(id) {
     if (saldo === null) return;
     c.saldoPendiente = parseAmountInput(saldo || 0);
   } else {
-    const monto = prompt('Monto de cuota:', c.montoCuota);
-    if (monto === null) return;
+    const total = prompt('Total del compromiso (opcional):', c.totalCompromiso || '');
+    if (total === null) return;
     const cuotas = prompt('Cuotas restantes:', c.cuotasRestantes);
     if (cuotas === null) return;
-    c.montoCuota = parseAmountInput(monto || 0);
+    const monto = prompt('Monto de cuota (dejalo vacío para calcularlo con total/cuotas):', c.montoCuota);
+    if (monto === null) return;
     c.cuotasRestantes = Number(cuotas || 0);
+    c.totalCompromiso = parseAmountInput(total || 0);
+    let cuota = parseAmountInput(monto || 0);
+    if (!cuota && c.totalCompromiso && c.cuotasRestantes > 0) cuota = Math.round(c.totalCompromiso / c.cuotasRestantes);
+    c.montoCuota = cuota;
   }
   render();
 }
@@ -1729,6 +1804,9 @@ function wireEvents() {
 
   document.getElementById('addFixedBtn').addEventListener('click', addFixed);
   document.getElementById('commitmentForm').addEventListener('submit', addCommitmentFromForm);
+  const commitmentType = document.getElementById('commitmentType');
+  if (commitmentType) commitmentType.addEventListener('change', updateCommitmentFormMode);
+  ['commitmentTotalInput','commitmentCuotaInput','commitmentCuotasInput'].forEach((id) => { const el = document.getElementById(id); if (el) el.addEventListener('input', updateCommitmentHint); });
   document.getElementById('movementForm').addEventListener('submit', addMovementFromForm);
 
   document.querySelectorAll('.trip-line-form').forEach((form) => form.addEventListener('submit', addTripLineFromForm));
@@ -1803,6 +1881,7 @@ window.restoreLatestSnapshot = restoreLatestSnapshot;
 window.exportCsv = exportCsv;
 
 wireEvents();
+updateCommitmentFormMode();
 render();
 
 if ('serviceWorker' in navigator) {

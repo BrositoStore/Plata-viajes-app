@@ -110,16 +110,18 @@
           </div>
           <div class="card-body">
             <form id="commitmentForm" class="grid-form">
-              <select name="tipo">
+              <select name="tipo" id="commitmentType">
                 <option value="saldo">Saldo pendiente</option>
                 <option value="cuotas">Cuotas</option>
               </select>
               <input name="nombre" placeholder="Nombre" />
-              <input name="saldoPendiente" type="number" placeholder="Saldo pendiente" />
-              <input name="montoCuota" type="number" placeholder="Monto cuota" />
-              <input name="cuotasRestantes" type="number" placeholder="Cuotas restantes" />
+              <input id="commitmentSaldoInput" name="saldoPendiente" type="number" placeholder="Saldo pendiente" />
+              <input id="commitmentTotalInput" name="totalCompromiso" type="number" placeholder="Total del compromiso (opcional)" class="hidden" disabled />
+              <input id="commitmentCuotaInput" name="montoCuota" type="number" placeholder="Monto cuota" class="hidden" disabled />
+              <input id="commitmentCuotasInput" name="cuotasRestantes" type="number" placeholder="Cuotas restantes" class="hidden" disabled />
               <button type="submit">Agregar compromiso</button>
             </form>
+            <div id="commitmentHint" class="field-hint"></div>
             <div id="commitmentsList" class="stack"></div>
           </div>
         </div>
