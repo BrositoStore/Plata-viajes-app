@@ -135,7 +135,9 @@ function emptyHtml(text) {
 }
 
 function statusBadge(text) {
-  return `<span class="badge-status">${text}</span>`;
+  const t = String(text || '').toLowerCase();
+  const extra = t.includes('pag') ? ' is-paid' : t.includes('parc') ? ' is-partial' : t.includes('debe') || t.includes('deud') ? ' is-debt' : '';
+  return `<span class="badge-status${extra}">${text}</span>`;
 }
 
 function clientTripSummaryText(clientName, trip = currentTrip()) {

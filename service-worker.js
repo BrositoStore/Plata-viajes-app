@@ -1,4 +1,4 @@
-const CACHE = 'plata-viajes-pwa-v1';
+const CACHE = 'plata-viajes-pwa-v5';
 const ASSETS = [
   './',
   './index.html',
