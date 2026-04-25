@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plata + Viajes</title>
+  <meta name="theme-color" content="#111827" />
+  <meta name="description" content="Base de datos personal para plata, viajes, clientes y deudores." />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">App personal</div>
+        <h1>Plata + Viajes</h1>
+        <p class="subtle">Base de datos personal para plata, viajes, clientes y deudores.</p>
+      </div>
+      <div class="top-actions">
+        <label class="compact">
+          <span>Mes</span>
+          <input id="monthPicker" type="month" />
+        </label>
+        <button id="nextMonthBtn" class="secondary">Nuevo mes</button>
+        <button id="backupBtn" class="secondary">Backup</button>
+        <label class="secondary fake-file">
+          Importar
+          <input id="importInput" type="file" accept="application/json" hidden />
+        </label>
+      </div>
+    </header>
+
+    <section id="globalStats" class="stats-grid"></section>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="plata">Plata</button>
+      <button class="tab" data-tab="viajes">Viajes</button>
+    </nav>
+
+    <main>
+      <section id="tab-plata" class="tab-panel active">
+        <div class="card">
+          <div class="card-head">
+            <h2>Gastos fijos del mes</h2>
+          </div>
+          <div class="card-body">
+            <div id="fixedList" class="list"></div>
+            <button id="addFixedBtn">Agregar gasto fijo</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Deudas y cuotas</h2>
+          </div>
+          <div class="card-body">
+            <form id="commitmentForm" class="grid-form">
+              <select name="tipo">
+                <option value="saldo">Saldo pendiente</option>
+                <option value="cuotas">Cuotas</option>
+              </select>
+              <input name="nombre" placeholder="Nombre" />
+              <input name="saldoPendiente" type="number" placeholder="Saldo pendiente" />
+              <input name="montoCuota" type="number" placeholder="Monto cuota" />
+              <input name="cuotasRestantes" type="number" placeholder="Cuotas restantes" />
+              <button type="submit">Agregar compromiso</button>
+            </form>
+            <div id="commitmentsList" class="stack"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Movimientos del mes</h2>
+          </div>
+          <div class="card-body">
+            <form id="movementForm" class="grid-form">
+              <input name="fecha" type="date" />
+              <select name="tipo">
+                <option value="gasto">Gasto</option>
+                <option value="ingreso">Ingreso</option>
+              </select>
+              <input name="categoria" placeholder="Categoría" />
+              <input name="descripcion" placeholder="Descripción" />
+              <input name="monto" type="number" placeholder="Monto" />
+              <button type="submit">Agregar movimiento</button>
+            </form>
+            <div id="movementsList" class="list"></div>
+            <div id="plataSummary" class="stats-grid compact"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-viajes" class="tab-panel">
+        <div class="card">
+          <div class="card-head">
+            <h2>Resumen del mes en viajes</h2>
+          </div>
+          <div class="card-body">
+            <div id="tripMonthSummary" class="stats-grid compact"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Viaje actual</h2>
+          </div>
+          <div class="card-body">
+            <div class="grid-2">
+              <label>
+                <span>Fecha</span>
+                <input id="tripDate" type="date" />
+              </label>
+              <label class="full">
+                <span>Notas</span>
+                <textarea id="tripNotes" rows="2" placeholder="Anotaciones del viaje"></textarea>
+              </label>
+            </div>
+
+            <div id="tripSummaryStats" class="stats-grid compact"></div>
+
+            <div class="grid-2">
+              <div class="card inner">
+                <div class="card-head"><h3>Pasajeros</h3></div>
+                <div class="card-body">
+                  <form id="formPasajeros" class="trip-line-form" data-section="pasajeros" data-list="clientList1">
+                    <input name="cliente" list="clientList1" placeholder="Cliente / pasajero" />
+                    <datalist id="clientList1"></datalist>
+                    <input name="detalle" placeholder="Destino" />
+                    <input name="cobro" type="number" placeholder="Cobro" />
+                    <select name="pagado">
+                      <option value="si">Pagado</option>
+                      <option value="no">Debe</option>
+                    </select>
+                    <button type="submit">Agregar</button>
+                  </form>
+                  <div id="listPasajeros" class="list"></div>
+                </div>
+              </div>
+
+              <div class="card inner">
+                <div class="card-head"><h3>Pedidos por transferencia</h3></div>
+                <div class="card-body">
+                  <form id="formTransfer" class="trip-line-form" data-section="pedidosTransferencia" data-list="clientList2">
+                    <input name="cliente" list="clientList2" placeholder="Cliente" />
+                    <datalist id="clientList2"></datalist>
+                    <input name="detalle" placeholder="Cantidad / detalle" />
+                    <input name="cobro" type="number" placeholder="Cobro" />
+                    <select name="pagado">
+                      <option value="si">Pagado</option>
+                      <option value="no">Debe</option>
+                    </select>
+                    <button type="submit">Agregar</button>
+                  </form>
+                  <div id="listTransfer" class="list"></div>
+                </div>
+              </div>
+
+              <div class="card inner">
+                <div class="card-head"><h3>Pedidos con sobre</h3></div>
+                <div class="card-body">
+                  <form id="formSobres" class="trip-line-form" data-section="pedidosConSobre" data-list="clientList3">
+                    <input name="cliente" list="clientList3" placeholder="Cliente" />
+                    <datalist id="clientList3"></datalist>
+                    <input name="detalle" placeholder="Cantidad / detalle" />
+                    <input name="cobro" type="number" placeholder="Cobro" />
+                    <select name="pagado">
+                      <option value="si">Pagado</option>
+                      <option value="no">Debe</option>
+                    </select>
+                    <button type="submit">Agregar</button>
+                  </form>
+                  <div id="listSobres" class="list"></div>
+                </div>
+              </div>
+
+              <div class="card inner">
+                <div class="card-head"><h3>Pedidos en provincia</h3></div>
+                <div class="card-body">
+                  <form id="formProvincia" class="trip-line-form" data-section="pedidosProvincia" data-list="clientList4">
+                    <input name="cliente" list="clientList4" placeholder="Cliente" />
+                    <datalist id="clientList4"></datalist>
+                    <input name="detalle" placeholder="Localidad / detalle" />
+                    <input name="cobro" type="number" placeholder="Cobro" />
+                    <select name="pagado">
+                      <option value="si">Pagado</option>
+                      <option value="no">Debe</option>
+                    </select>
+                    <button type="submit">Agregar</button>
+                  </form>
+                  <div id="listProvincia" class="list"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card inner">
+              <div class="card-head">
+                <h3>Gastos del viaje</h3>
+                <span class="pill">Categorías editables</span>
+              </div>
+              <div class="card-body">
+                <form id="tripExpenseForm" class="grid-form">
+                  <select name="categoria" id="tripExpenseCategorySelect"></select>
+                  <input name="detalle" placeholder="Detalle" />
+                  <input name="monto" type="number" placeholder="Monto" />
+                  <button type="submit">Agregar gasto</button>
+                </form>
+
+                <div class="inline-row">
+                  <input id="newExpenseCategory" placeholder="Nueva categoría de gasto" />
+                  <button id="addExpenseCategoryBtn" class="secondary">Agregar categoría</button>
+                </div>
+
+                <div id="expenseCategoriesList" class="chips"></div>
+                <div id="tripExpensesList" class="list"></div>
+              </div>
+            </div>
+
+            <div class="card inner">
+              <div class="card-head">
+                <h3>Resumen por cliente</h3>
+              </div>
+              <div class="card-body">
+                <div id="tripClientsSummary" class="list"></div>
+              </div>
+            </div>
+
+            <div class="card inner">
+              <div class="card-head">
+                <h3>Resumen automático del viaje</h3>
+                <button id="copyTripSummaryBtn" class="secondary small">Copiar resumen</button>
+              </div>
+              <div class="card-body">
+                <pre id="tripAutoSummary" class="summary-box"></pre>
+              </div>
+            </div>
+
+            <button id="closeTripBtn">Cerrar viaje y pasar deudores pendientes</button>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>Clientes frecuentes</h2></div>
+            <div class="card-body">
+              <form id="clientForm" class="grid-form">
+                <input name="nombre" placeholder="Nombre cliente" />
+                <input name="telefono" placeholder="Teléfono" />
+                <input name="notas" placeholder="Notas" />
+                <button type="submit">Agregar cliente</button>
+              </form>
+              <input id="clientSearch" placeholder="Buscar cliente" />
+              <div id="clientsList" class="list"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Deudores permanentes</h2></div>
+            <div class="card-body">
+              <form id="manualDebtorForm" class="grid-form">
+                <input name="nombre" placeholder="Nombre deudor" />
+                <input name="saldo" type="number" placeholder="Saldo" />
+                <input name="detalle" placeholder="Detalle" />
+                <button type="submit">Agregar manual</button>
+              </form>
+              <div id="debtorsList" class="stack"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Historial de viajes</h2></div>
+          <div class="card-body">
+            <div id="tripHistoryList" class="list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer-note">
+      <p>Todo se guarda en este navegador. Hacé backup seguido si esto va a ser tu base principal.</p>
+    </footer>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
