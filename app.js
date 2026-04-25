@@ -1,5 +1,5 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v7';
-const STORAGE_KEYS = ['plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
+const STORAGE_KEY = 'plata-viajes-pwa-v11';
+const STORAGE_KEYS = ['plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -10,6 +10,16 @@ const monthKeyNow = () => {
 const toMonthKey = (date) => String(date || '').slice(0, 7);
 const money = (n) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(Number(n || 0));
 const norm = (v) => String(v || '').trim().toLowerCase();
+
+function parseAmountInput(value) {
+  if (value === null || value === undefined) return 0;
+  const cleaned = String(value).trim().replace(/\./g, '').replace(/,/g, '.');
+  if (!cleaned) return 0;
+  let n = Number(cleaned);
+  if (!Number.isFinite(n)) return 0;
+  if (n !== 0 && Math.abs(n) < 1000) n = n * 1000;
+  return Math.round(n);
+}
 
 function lineAmounts(item) {
   const total = Number(item?.cobro || 0);
@@ -139,7 +149,7 @@ function cloneFixedExpenses(sourceMonth) {
     ...g,
     id: uid(),
     nombre: String(g.nombre || ''),
-    monto: Number(g.monto ?? 0),
+    monto: parseAmountInput(g.monto ?? 0),
     pagado: false,
   }));
 }
@@ -156,35 +166,47 @@ function isPlaceholderMonth(month) {
   return movimientos.length === 0 && fixed.length > 0 && fixed.every((g) => Number(g?.monto || 0) === 0 && !g?.pagado);
 }
 
-function findBestMonthTemplate(sourceMonthKey = state.currentMonth) {
-  const preferred = state.months[sourceMonthKey];
-  if (hasMeaningfulFixedExpenses(preferred)) return preferred;
+function previousMonthKey(monthKey) {
+  const [y, m] = String(monthKey).split('-').map(Number);
+  const d = new Date(y, (m || 1) - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function findReferenceMonthForNewMonth(monthKey, sourceMonthKey = state.currentMonth) {
+  const directPreviousKey = previousMonthKey(monthKey);
+  const directPrevious = state.months[directPreviousKey];
+  if (hasMeaningfulFixedExpenses(directPrevious)) return directPrevious;
+
+  const explicitSource = state.months[sourceMonthKey];
+  if (hasMeaningfulFixedExpenses(explicitSource)) return explicitSource;
 
   const allMonths = Object.entries(state.months || {})
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .reverse()
+    .filter(([key]) => key < monthKey)
+    .sort((a, b) => b[0].localeCompare(a[0]))
     .map(([, value]) => value);
 
   const withFixed = allMonths.find((m) => hasMeaningfulFixedExpenses(m));
-  return withFixed || preferred || baseMonth();
+  return withFixed || explicitSource || baseMonth();
 }
 
 function ensureMonth(monthKey, sourceMonthKey = state.currentMonth) {
-  const source = findBestMonthTemplate(sourceMonthKey);
+  const reference = findReferenceMonthForNewMonth(monthKey, sourceMonthKey);
   const existing = state.months[monthKey];
 
   if (!existing) {
     state.months[monthKey] = {
-      gastosFijos: cloneFixedExpenses(source),
+      gastosFijos: cloneFixedExpenses(reference),
       movimientos: [],
     };
     return;
   }
 
-  if (isPlaceholderMonth(existing) && hasMeaningfulFixedExpenses(source)) {
+  const existingHasMeaningfulFixed = hasMeaningfulFixedExpenses(existing);
+  const existingLooksPlaceholder = isPlaceholderMonth(existing);
+  if ((!existingHasMeaningfulFixed || existingLooksPlaceholder) && hasMeaningfulFixedExpenses(reference)) {
     state.months[monthKey] = {
       ...existing,
-      gastosFijos: cloneFixedExpenses(source),
+      gastosFijos: cloneFixedExpenses(reference),
       movimientos: Array.isArray(existing.movimientos) ? existing.movimientos : [],
     };
   }
@@ -307,7 +329,7 @@ function applyClientPayment(clientName) {
   const amount = prompt(`Monto que pagó ${clientName}:
 Pendiente actual: ${money(g.pendiente)}`, String(g.pendiente));
   if (amount === null) return;
-  let restante = Math.max(0, Number(amount || 0));
+  let restante = Math.max(0, parseAmountInput(amount || 0));
   if (!restante) return;
   ['pasajeros', 'pedidos'].forEach((section) => {
     (currentTrip()[section] || []).forEach((item) => {
@@ -802,7 +824,7 @@ function editFixed(id) {
   const monto = prompt('Monto del gasto fijo:', item.monto);
   if (monto === null) return;
   item.nombre = nombre.trim();
-  item.monto = Number(monto || 0);
+  item.monto = parseAmountInput(monto || 0);
   render();
 }
 function removeFixed(id) {
@@ -817,11 +839,11 @@ function addCommitmentFromForm(ev) {
   const nombre = String(fd.get('nombre') || '').trim();
   if (!nombre) return;
   if (tipo === 'saldo') {
-    const saldoPendiente = Number(fd.get('saldoPendiente') || 0);
+    const saldoPendiente = parseAmountInput(fd.get('saldoPendiente') || 0);
     if (!saldoPendiente) return;
     state.compromisos.unshift({ id: uid(), tipo, nombre, saldoPendiente, historial: [] });
   } else {
-    const montoCuota = Number(fd.get('montoCuota') || 0);
+    const montoCuota = parseAmountInput(fd.get('montoCuota') || 0);
     const cuotasRestantes = Number(fd.get('cuotasRestantes') || 0);
     if (!montoCuota || !cuotasRestantes) return;
     state.compromisos.unshift({ id: uid(), tipo, nombre, montoCuota, cuotasRestantes, historial: [] });
@@ -838,13 +860,13 @@ function editCommitment(id) {
   if (c.tipo === 'saldo') {
     const saldo = prompt('Saldo pendiente:', c.saldoPendiente);
     if (saldo === null) return;
-    c.saldoPendiente = Number(saldo || 0);
+    c.saldoPendiente = parseAmountInput(saldo || 0);
   } else {
     const monto = prompt('Monto de cuota:', c.montoCuota);
     if (monto === null) return;
     const cuotas = prompt('Cuotas restantes:', c.cuotasRestantes);
     if (cuotas === null) return;
-    c.montoCuota = Number(monto || 0);
+    c.montoCuota = parseAmountInput(monto || 0);
     c.cuotasRestantes = Number(cuotas || 0);
   }
   render();
@@ -855,7 +877,7 @@ function registerCommitmentPayment(id) {
   if (c.tipo === 'saldo') {
     const monto = prompt('Monto entregado:', '0');
     if (monto === null) return;
-    const m = Number(monto || 0);
+    const m = parseAmountInput(monto || 0);
     c.saldoPendiente = Math.max(0, Number(c.saldoPendiente || 0) - m);
     c.historial.unshift({ id: uid(), fecha: today(), monto: m, texto: 'Pago registrado' });
   } else {
@@ -864,7 +886,7 @@ function registerCommitmentPayment(id) {
     const q = Math.max(1, Number(cuotasPagadas || 1));
     const monto = prompt('Monto pagado (vacío = cuota x cantidad):', '');
     if (monto === null) return;
-    const m = Number(monto || 0) || Number(c.montoCuota || 0) * q;
+    const m = parseAmountInput(monto || 0) || Number(c.montoCuota || 0) * q;
     c.cuotasRestantes = Math.max(0, Number(c.cuotasRestantes || 0) - q);
     c.historial.unshift({ id: uid(), fecha: today(), monto: m, texto: `${q} cuota${q > 1 ? 's' : ''} pagada${q > 1 ? 's' : ''}` });
   }
@@ -884,7 +906,7 @@ function addMovementFromForm(ev) {
     tipo: fd.get('tipo') || 'gasto',
     categoria: String(fd.get('categoria') || '').trim(),
     descripcion: String(fd.get('descripcion') || '').trim(),
-    monto: Number(fd.get('monto') || 0),
+    monto: parseAmountInput(fd.get('monto') || 0),
   };
   if (!entry.categoria || !entry.monto) return;
   currentMonthData().movimientos.unshift(entry);
@@ -905,7 +927,7 @@ function editMovement(id) {
   if (descripcion === null) return;
   const monto = prompt('Monto:', m.monto);
   if (monto === null) return;
-  Object.assign(m, { fecha, tipo, categoria, descripcion, monto: Number(monto || 0) });
+  Object.assign(m, { fecha, tipo, categoria, descripcion, monto: parseAmountInput(monto || 0) });
   render();
 }
 function removeMovement(id) {
@@ -917,8 +939,8 @@ function addTripLineFromForm(ev) {
   ev.preventDefault();
   const section = ev.target.dataset.section;
   const fd = new FormData(ev.target);
-  const cobro = Number(fd.get('cobro') || 0);
-  const cobradoInicial = Math.max(0, Math.min(Number(fd.get('cobradoInicial') || 0), cobro));
+  const cobro = parseAmountInput(fd.get('cobro') || 0);
+  const cobradoInicial = Math.max(0, Math.min(parseAmountInput(fd.get('cobradoInicial') || 0), cobro));
   const item = normalizeTripLine({
     id: uid(),
     cliente: String(fd.get('cliente') || '').trim(),
@@ -965,7 +987,7 @@ function registerTripItemPayment(section, id) {
   const amount = prompt(`Monto que pagó ahora:
 Pendiente actual: ${money(amounts.pendiente)}`, String(amounts.pendiente));
   if (amount === null) return;
-  const m = Number(amount || 0);
+  const m = parseAmountInput(amount || 0);
   if (!m) return;
   const aplicado = Math.max(0, Math.min(m, amounts.pendiente));
   item.cobradoActual = amounts.cobrado + aplicado;
@@ -1008,7 +1030,7 @@ function addTripExpenseFromForm(ev) {
     id: uid(),
     categoria: String(fd.get('categoria') || '').trim(),
     detalle: String(fd.get('detalle') || '').trim(),
-    monto: Number(fd.get('monto') || 0),
+    monto: parseAmountInput(fd.get('monto') || 0),
   };
   if (!item.categoria || !item.monto) return;
   currentTrip().gastos.unshift(item);
@@ -1024,7 +1046,7 @@ function editTripExpense(id) {
   if (detalle === null) return;
   const monto = prompt('Monto:', item.monto);
   if (monto === null) return;
-  Object.assign(item, { categoria: categoria.trim(), detalle: detalle.trim(), monto: Number(monto || 0) });
+  Object.assign(item, { categoria: categoria.trim(), detalle: detalle.trim(), monto: parseAmountInput(monto || 0) });
   if (categoria.trim() && !(state.tripExpenseCategories || []).includes(categoria.trim())) state.tripExpenseCategories.push(categoria.trim());
   render();
 }
@@ -1076,7 +1098,7 @@ function addManualDebtorFromForm(ev) {
   ev.preventDefault();
   const fd = new FormData(ev.target);
   const nombre = String(fd.get('nombre') || '').trim();
-  const saldo = Number(fd.get('saldo') || 0);
+  const saldo = parseAmountInput(fd.get('saldo') || 0);
   const detalle = String(fd.get('detalle') || '').trim();
   if (!nombre || !saldo) return;
   state.deudores = mergeDebtors(state.deudores || [], {
@@ -1109,7 +1131,7 @@ function payDebtor(id) {
   if (!d) return;
   const amount = prompt('Monto que pagó:', '0');
   if (amount === null) return;
-  const m = Number(amount || 0);
+  const m = parseAmountInput(amount || 0);
   d.saldo = Math.max(0, Number(d.saldo || 0) - m);
   d.historial.unshift({ id: uid(), fecha: today(), monto: m, texto: 'Pago registrado' });
   state.deudores = state.deudores.filter((x) => Number(x.saldo || 0) > 0);

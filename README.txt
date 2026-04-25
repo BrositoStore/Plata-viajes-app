@@ -93,3 +93,9 @@ Versión v6:
 
 
 Versión v7: reabrir viaje desde historial, registrar pago por cliente, historial visible de pagos por línea, saldar todo en deudores, copia de resumen mensual y carga rápida renombrada.
+
+
+Versión v11:
+- Nuevo mes toma siempre como referencia el último mes cargado inmediato anterior.
+- Los gastos fijos se copian con mismo nombre y mismo monto, y quedan pendientes.
+- Todo monto menor a 1000 se interpreta como miles: 35 => 35000, 5 => 5000, 14 => 14000.
