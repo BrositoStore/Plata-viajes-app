@@ -134,9 +134,9 @@ function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-function ensureMonth(monthKey) {
+function ensureMonth(monthKey, sourceMonthKey = state.currentMonth) {
   if (!state.months[monthKey]) {
-    const source = state.months[state.currentMonth] || baseMonth();
+    const source = state.months[sourceMonthKey] || baseMonth();
     state.months[monthKey] = {
       gastosFijos: (source.gastosFijos || []).map((g) => ({ ...g, id: uid(), pagado: false })),
       movimientos: [],
@@ -1215,15 +1215,19 @@ function copyClientHistorySummary(id) {
 function wireEvents() {
   document.querySelectorAll('.tab').forEach((btn) => btn.addEventListener('click', () => setTab(btn.dataset.tab)));
   document.getElementById('nextMonthBtn').addEventListener('click', () => {
-    const [y, m] = state.currentMonth.split('-').map(Number);
+    const previousMonth = state.currentMonth;
+    const [y, m] = previousMonth.split('-').map(Number);
     const d = new Date(y, m, 1);
-    state.currentMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    ensureMonth(state.currentMonth);
+    const nextMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    ensureMonth(nextMonth, previousMonth);
+    state.currentMonth = nextMonth;
     render();
   });
   document.getElementById('monthPicker').addEventListener('change', (e) => {
-    state.currentMonth = e.target.value;
-    ensureMonth(state.currentMonth);
+    const previousMonth = state.currentMonth;
+    const selectedMonth = e.target.value;
+    ensureMonth(selectedMonth, previousMonth);
+    state.currentMonth = selectedMonth;
     render();
   });
   document.getElementById('backupBtn').addEventListener('click', backupData);
