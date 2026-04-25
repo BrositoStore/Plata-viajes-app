@@ -1,4 +1,5 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v4';
+const STORAGE_KEY = 'plata-viajes-pwa-v7';
+const STORAGE_KEYS = ['plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -115,7 +116,11 @@ normalizeTrip(state.viajeActual);
 
 function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = null;
+    for (const key of STORAGE_KEYS) {
+      raw = localStorage.getItem(key);
+      if (raw) break;
+    }
     if (!raw) return initialState();
     const parsed = JSON.parse(raw);
     return migrateState(parsed);
@@ -215,6 +220,94 @@ function getClientAnalytics(name) {
     if (norm(d.nombre) === norm(name)) analytics.pendienteActual += Number(d.saldo || 0);
   });
   return analytics;
+}
+
+
+
+function generateMonthTripSummaryText(monthKey = state.currentMonth) {
+  const trips = (state.historialViajes || []).filter((v) => toMonthKey(v.fecha) === monthKey);
+  const summary = {
+    cantidad: trips.length,
+    facturado: trips.reduce((a, v) => a + Number(v.totalFacturado || 0), 0),
+    cobrado: trips.reduce((a, v) => a + Number(v.totalCobrado || 0), 0),
+    pendiente: trips.reduce((a, v) => a + Number(v.totalPendiente || 0), 0),
+    gastos: trips.reduce((a, v) => a + Number(v.totalGastosViaje || 0), 0),
+    utilidad: trips.reduce((a, v) => a + Number(v.gananciaContable || 0), 0),
+    caja: trips.reduce((a, v) => a + Number(v.cajaNetaReal || 0), 0),
+  };
+  return [
+    `Mes: ${monthKey}`,
+    `Viajes cerrados: ${summary.cantidad}`,
+    `Facturado: ${money(summary.facturado)}`,
+    `Cobrado: ${money(summary.cobrado)}`,
+    `Pendiente: ${money(summary.pendiente)}`,
+    `Gastos: ${money(summary.gastos)}`,
+    `Ganancia neta contable: ${money(summary.utilidad)}`,
+    `Caja neta real: ${money(summary.caja)}`,
+  ].join('\n');
+}
+
+function copyMonthTripSummary() {
+  navigator.clipboard.writeText(generateMonthTripSummaryText(state.currentMonth)).then(() => alert('Resumen del mes copiado.'));
+}
+
+function applyClientPayment(clientName) {
+  const groups = buildTripClientSummary(currentTrip());
+  const g = groups.find((x) => norm(x.cliente) === norm(clientName));
+  if (!g || !g.pendiente) {
+    alert('Ese cliente no tiene saldo pendiente en el viaje.');
+    return;
+  }
+  const amount = prompt(`Monto que pagó ${clientName}:
+Pendiente actual: ${money(g.pendiente)}`, String(g.pendiente));
+  if (amount === null) return;
+  let restante = Math.max(0, Number(amount || 0));
+  if (!restante) return;
+  ['pasajeros', 'pedidos'].forEach((section) => {
+    (currentTrip()[section] || []).forEach((item) => {
+      if (!restante || norm(item.cliente) !== norm(clientName)) return;
+      const amounts = lineAmounts(item);
+      const aplicado = Math.min(restante, amounts.pendiente);
+      if (!aplicado) return;
+      item.cobradoActual = amounts.cobrado + aplicado;
+      item.pagado = item.cobradoActual >= item.cobro;
+      item.pagos.unshift({ id: uid(), fecha: today(), monto: aplicado, texto: 'Pago por cliente' });
+      restante -= aplicado;
+    });
+  });
+  render();
+}
+
+function settleDebtor(id) {
+  const d = (state.deudores || []).find((x) => x.id === id);
+  if (!d) return;
+  if (!confirm(`Marcar saldado a ${d.nombre} por ${money(d.saldo)}?`)) return;
+  d.historial.unshift({ id: uid(), fecha: today(), monto: Number(d.saldo || 0), texto: 'Saldo total cancelado' });
+  d.saldo = 0;
+  state.deudores = state.deudores.filter((x) => Number(x.saldo || 0) > 0);
+  render();
+}
+
+function loadTripFromHistory(id) {
+  const trip = (state.historialViajes || []).find((x) => x.id === id);
+  if (!trip) return;
+  const current = currentTrip();
+  const currentHasData = [current.pasajeros?.length, current.pedidos?.length, current.gastos?.length, current.notas].some(Boolean);
+  if (currentHasData && !confirm('Ya tenés un viaje actual con datos. ¿Reemplazarlo por este viaje del historial para editarlo?')) return;
+  const cloned = JSON.parse(JSON.stringify(trip));
+  delete cloned.cerradoEn;
+  delete cloned.estado;
+  delete cloned.totalFacturado;
+  delete cloned.totalCobrado;
+  delete cloned.totalPendiente;
+  delete cloned.totalGastosViaje;
+  delete cloned.gananciaContable;
+  delete cloned.cajaNetaReal;
+  delete cloned.summaryText;
+  state.viajeActual = normalizeTrip(cloned);
+  setTab('viajes');
+  render();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function buildTripClientSummary(trip) {
@@ -461,7 +554,7 @@ function renderViajes() {
         <div class="row-actions">
           <div class="amount">${money(g.facturado)}</div>
           <button class="secondary small" onclick="copyClientTripSummary('${safeName}')">Copiar</button>
-          ${g.pendiente > 0 ? `<button class="secondary small" onclick="setClientPaidStatus('${safeName}', true)">Marcar todo cobrado</button>` : `<button class="secondary small" onclick="setClientPaidStatus('${safeName}', false)">Volver a pendiente</button>`}
+          ${g.pendiente > 0 ? `<button class="secondary small" onclick="applyClientPayment('${safeName}')">Registrar pago</button><button class="secondary small" onclick="setClientPaidStatus('${safeName}', true)">Marcar todo cobrado</button>` : `<button class="secondary small" onclick="setClientPaidStatus('${safeName}', false)">Volver a pendiente</button>`}
         </div>
       </div>
     `);
@@ -481,6 +574,7 @@ function renderViajes() {
         </div>
         <div class="row-actions">
           <div class="amount good">${money(v.cajaNetaReal)}</div>
+          <button class="secondary small" onclick="loadTripFromHistory('${v.id}')">Reabrir</button>
           <button class="secondary small" onclick="copyTripHistorySummary('${v.id}')">Copiar resumen</button>
           <button class="secondary small" onclick="removeTripHistory('${v.id}')">Borrar</button>
         </div>
@@ -513,6 +607,7 @@ function renderViajes() {
   renderDebtors();
 }
 
+
 function renderTripSection(sectionKey, targetId) {
   const list = document.getElementById(targetId);
   const trip = currentTrip();
@@ -521,16 +616,20 @@ function renderTripSection(sectionKey, targetId) {
   items.forEach((rawItem) => {
     const item = normalizeTripLine(rawItem);
     const amounts = lineAmounts(item);
+    const paymentsHtml = (item.pagos || []).length
+      ? `<details class="mini-history"><summary>Ver pagos (${item.pagos.length})</summary><div class="mini-history-list">${item.pagos.map((p) => `<div class="mini-history-item"><span>${p.fecha} · ${p.texto}</span><strong>${money(p.monto)}</strong></div>`).join('')}</div></details>`
+      : '';
     list.insertAdjacentHTML('beforeend', `
       <div class="row">
         <div>
           <div class="title">${item.cliente || 'Sin cliente'}</div>
           <div class="sub">${item.detalle || 'Sin detalle'}</div>
-          <div class="meta">${amounts.estado} · Cobrado ${money(amounts.cobrado)} / Pendiente ${money(amounts.pendiente)}</div>
+          <div class="meta">${statusBadge(amounts.estado)} · Cobrado ${money(amounts.cobrado)} / Pendiente ${money(amounts.pendiente)}</div>
+          ${paymentsHtml}
         </div>
         <div class="row-actions">
           <div class="amount ${amounts.pendiente === 0 ? 'good' : amounts.cobrado > 0 ? '' : 'danger'}">${money(amounts.total)}</div>
-          ${amounts.pendiente > 0 ? `<button class="secondary small" onclick="registerTripItemPayment('${sectionKey}','${item.id}')">Registrar pago</button>` : `<button class="secondary small" onclick="resetTripItemPayment('${sectionKey}','${item.id}')">Volver a pendiente</button>`}
+          ${amounts.pendiente > 0 ? `<button class="secondary small" onclick="registerTripItemPayment('${sectionKey}','${item.id}')">Registrar pago</button><button class="secondary small" onclick="toggleTripItemPaid('${sectionKey}','${item.id}')">Cobrar todo</button>` : `<button class="secondary small" onclick="resetTripItemPayment('${sectionKey}','${item.id}')">Volver a pendiente</button>`}
           <button class="secondary small" onclick="editTripLine('${sectionKey}','${item.id}')">Editar</button>
           <button class="secondary small" onclick="removeTripItem('${sectionKey}','${item.id}')">Borrar</button>
         </div>
@@ -1063,7 +1162,9 @@ function importData(file) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      state = JSON.parse(String(reader.result));
+      state = migrateState(JSON.parse(String(reader.result)));
+      normalizeTrip(state.viajeActual);
+      (state.historialViajes || []).forEach(normalizeTrip);
       render();
       alert('Backup importado.');
     } catch {
@@ -1139,6 +1240,8 @@ function wireEvents() {
   document.getElementById('tripNotes').addEventListener('input', (e) => { currentTrip().notas = e.target.value; render(); });
   document.getElementById('closeTripBtn').addEventListener('click', closeTrip);
   document.getElementById('copyTripSummaryBtn').addEventListener('click', copyTripSummary);
+  const copyMonthBtn = document.getElementById('copyMonthTripSummaryBtn');
+  if (copyMonthBtn) copyMonthBtn.addEventListener('click', copyMonthTripSummary);
 
   document.getElementById('clientForm').addEventListener('submit', addClientFromForm);
   document.getElementById('clientSearch').addEventListener('input', render);
@@ -1176,6 +1279,10 @@ window.payDebtor = payDebtor;
 window.removeDebtor = removeDebtor;
 window.setClientPaidStatus = setClientPaidStatus;
 window.copyClientTripSummary = copyClientTripSummary;
+window.applyClientPayment = applyClientPayment;
+window.copyMonthTripSummary = copyMonthTripSummary;
+window.loadTripFromHistory = loadTripFromHistory;
+window.settleDebtor = settleDebtor;
 window.copyClientHistorySummary = copyClientHistorySummary;
 window.copyTripHistorySummary = copyTripHistorySummary;
 window.removeTripHistory = removeTripHistory;

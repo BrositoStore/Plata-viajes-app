@@ -90,3 +90,6 @@ Versión v4:
 Versión v6:
 - pedidos unificados en una sola sección
 - asistente rápido por texto/voz para comandos comunes
+
+
+Versión v7: reabrir viaje desde historial, registrar pago por cliente, historial visible de pagos por línea, saldar todo en deudores, copia de resumen mensual y carga rápida renombrada.
