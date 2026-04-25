@@ -134,11 +134,34 @@ function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+function cloneFixedExpenses(sourceMonth) {
+  return (sourceMonth?.gastosFijos || []).map((g) => ({
+    ...g,
+    id: uid(),
+    nombre: String(g.nombre || ''),
+    monto: Number(g.monto ?? 0),
+    pagado: false,
+  }));
+}
+
+function findBestMonthTemplate(sourceMonthKey = state.currentMonth) {
+  const preferred = state.months[sourceMonthKey];
+  if (preferred && Array.isArray(preferred.gastosFijos) && preferred.gastosFijos.length) return preferred;
+
+  const allMonths = Object.entries(state.months || {})
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .reverse()
+    .map(([, value]) => value);
+
+  const withFixed = allMonths.find((m) => Array.isArray(m?.gastosFijos) && m.gastosFijos.length);
+  return withFixed || baseMonth();
+}
+
 function ensureMonth(monthKey, sourceMonthKey = state.currentMonth) {
   if (!state.months[monthKey]) {
-    const source = state.months[sourceMonthKey] || baseMonth();
+    const source = findBestMonthTemplate(sourceMonthKey);
     state.months[monthKey] = {
-      gastosFijos: (source.gastosFijos || []).map((g) => ({ ...g, id: uid(), pagado: false })),
+      gastosFijos: cloneFixedExpenses(source),
       movimientos: [],
     };
   }
@@ -1215,6 +1238,7 @@ function copyClientHistorySummary(id) {
 function wireEvents() {
   document.querySelectorAll('.tab').forEach((btn) => btn.addEventListener('click', () => setTab(btn.dataset.tab)));
   document.getElementById('nextMonthBtn').addEventListener('click', () => {
+    saveState();
     const previousMonth = state.currentMonth;
     const [y, m] = previousMonth.split('-').map(Number);
     const d = new Date(y, m, 1);
@@ -1224,6 +1248,7 @@ function wireEvents() {
     render();
   });
   document.getElementById('monthPicker').addEventListener('change', (e) => {
+    saveState();
     const previousMonth = state.currentMonth;
     const selectedMonth = e.target.value;
     ensureMonth(selectedMonth, previousMonth);
