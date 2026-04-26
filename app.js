@@ -974,14 +974,21 @@ function renderPlata() {
   const sortedFixedExpenses = sortFixedExpensesList(month.gastosFijos || []);
   fixedList.innerHTML = sortedFixedExpenses.length ? '' : emptyHtml('No hay gastos fijos cargados.');
   sortedFixedExpenses.forEach((g) => {
+    const stateText = g.pagado ? 'Pagado' : 'Pendiente';
     fixedList.insertAdjacentHTML('beforeend', `
-      <div class="row">
-        <div>
-          <div class="title">${g.nombre || 'Sin nombre'}</div>
-          <div class="sub">${money(g.monto)} · ${g.pagado ? 'Pagado' : 'Pendiente'}${g.arrastradoDe ? ` · deuda arrastrada de ${escapeHtml(g.arrastradoDe)}` : ''}</div>
+      <div class="row expense-row ${g.pagado ? 'is-paid' : 'is-pending'}">
+        <div class="expense-main">
+          <div class="expense-state-badge ${g.pagado ? 'paid' : 'pending'}">
+            <span class="expense-state-icon">${g.pagado ? '✓' : '•'}</span>
+            <span>${stateText}</span>
+          </div>
+          <div>
+            <div class="title">${g.nombre || 'Sin nombre'}</div>
+            <div class="sub">${money(g.monto)}${g.arrastradoDe ? ` · deuda arrastrada de ${escapeHtml(g.arrastradoDe)}` : ''}</div>
+          </div>
         </div>
         <div class="row-actions">
-          <button class="secondary small" onclick="toggleFixedPaid('${g.id}')">${g.pagado ? 'Marcar pendiente' : 'Marcar pagado'}</button>
+          <button class="secondary small ${g.pagado ? 'action-paid' : 'action-pending'}" onclick="toggleFixedPaid('${g.id}')">${g.pagado ? '✓ Pagado' : 'Marcar pagado'}</button>
           <button class="secondary small" onclick="editFixed('${g.id}')">Editar</button>
           <button class="secondary small" onclick="removeFixed('${g.id}')">Borrar</button>
         </div>
