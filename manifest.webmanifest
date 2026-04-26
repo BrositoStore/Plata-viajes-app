@@ -1,7 +1,7 @@
 {
-  "name": "Plata + Viajes",
-  "short_name": "PlataViajes",
-  "description": "Base de datos personal para plata, viajes, clientes y deudores.",
+  "name": "Plata + Viajes + Mantenimiento",
+  "short_name": "PV Mantenimiento",
+  "description": "Base de datos personal para plata, viajes, mantenimiento, clientes y deudores.",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#eef2ef",

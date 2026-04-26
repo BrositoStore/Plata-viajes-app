@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Plata + Viajes</title>
+  <title>Plata + Viajes + Mantenimiento</title>
   <meta name="theme-color" content="#15803d" />
-  <meta name="description" content="Base de datos personal para plata, viajes, clientes, deudores y carga rápida." />
+  <meta name="description" content="Base de datos personal para plata, viajes, mantenimiento, clientes y deudores." />
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
@@ -16,8 +16,8 @@
     <header class="topbar">
       <div>
         <div class="eyebrow">App personal</div>
-        <h1>Plata + Viajes</h1>
-        <p class="subtle">Base de datos personal para plata, viajes, clientes, deudores y carga rápida.</p>
+        <h1>Plata + Viajes + Mantenimiento</h1>
+        <p class="subtle">Base de datos personal para plata, viajes, mantenimiento, clientes y deudores.</p>
       </div>
       <div class="top-actions">
         <label class="compact">
@@ -39,10 +39,11 @@
 
     <section id="globalStats" class="stats-grid"></section>
 
-    <nav class="tabs tabs-3">
+    <nav class="tabs tabs-4">
       <button class="tab active" data-tab="inicio">Inicio</button>
       <button class="tab" data-tab="plata">Plata</button>
       <button class="tab" data-tab="viajes">Viajes</button>
+      <button class="tab" data-tab="mantenimiento">Mantenimiento</button>
     </nav>
 
     <main>
@@ -323,6 +324,46 @@
           </div>
         </div>
       </section>
+
+      <section id="tab-mantenimiento" class="tab-panel">
+        <div class="card">
+          <div class="card-head"><h2>Resumen de mantenimiento</h2></div>
+          <div class="card-body">
+            <div id="maintenanceSummary" class="stats-grid compact"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Registrar mantenimiento</h2></div>
+          <div class="card-body">
+            <form id="maintenanceForm" class="grid-form">
+              <select name="tipo" id="maintenanceTypeSelect"></select>
+              <input name="fecha" type="date" />
+              <input name="km" type="number" placeholder="Kilometraje" />
+              <input name="detalle" placeholder="Detalle / observación" />
+              <button type="submit">Agregar registro</button>
+            </form>
+            <div class="field-hint">Cargá fecha y kilometraje para controlar cambios de aceite, filtros y aceite de caja.</div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>Últimos controles por tipo</h2></div>
+            <div class="card-body">
+              <div id="maintenanceLastByType" class="stack"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Historial de mantenimiento</h2></div>
+            <div class="card-body">
+              <div id="maintenanceList" class="list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </main>
 
     <footer class="footer-note">

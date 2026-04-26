@@ -776,3 +776,5 @@ h1 {
     min-width: auto;
   }
 }
+
+.tabs.tabs-4{grid-template-columns:repeat(4,1fr)}
