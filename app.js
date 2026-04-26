@@ -1,6 +1,6 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v14';
-const STORAGE_KEYS = ['plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
-const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v14';
+const STORAGE_KEY = 'plata-viajes-pwa-v17';
+const STORAGE_KEYS = ['plata-viajes-pwa-v17','plata-viajes-pwa-v16','plata-viajes-pwa-v15','plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
+const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v17';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -21,6 +21,9 @@ function parseAmountInput(value) {
   if (n !== 0 && Math.abs(n) < 1000) n = n * 1000;
   return Math.round(n);
 }
+
+const MAX_AUDIT_PREVIEW = 5;
+let auditExpanded = false;
 
 function lineAmounts(item) {
   const total = Number(item?.cobro || 0);
@@ -134,7 +137,10 @@ function migrateState(parsed) {
       nombre: String(g.nombre || ''),
       monto: parseAmountInput(g.monto || 0),
       pagado: !!g.pagado,
+      arrastradoDe: g.arrastradoDe || '',
+      nombreBase: g.nombreBase || '',
     })));
+    if (!Object.prototype.hasOwnProperty.call(month, 'carryoverGenerated')) month.carryoverGenerated = false;
     parsed.months[key] = month;
   });
   parsed.viajeActual = migrateTripToUnifiedPedidos(parsed.viajeActual || emptyTrip());
@@ -241,10 +247,15 @@ function closeCurrentMonth() {
     tripGastos: tripSummary.gastos, tripGananciaContable: tripSummary.utilidad, tripCaja: tripSummary.caja,
     balanceCajaMes: totalIngresos - totalGastos - totalPagadoFijos,
   };
-  if (!confirm(`Cerrar ${state.currentMonth}?\nCaja del mes: ${money(cierre.balanceCajaMes)}\nViajes cobrados: ${money(cierre.tripCobrado)}\nPendiente: ${money(cierre.tripPendiente)}`)) return;
+  if (!confirm(`Cerrar ${state.currentMonth}?
+Caja del mes: ${money(cierre.balanceCajaMes)}
+Viajes cobrados: ${money(cierre.tripCobrado)}
+Pendiente: ${money(cierre.tripPendiente)}`)) return;
   month.closedAt = cierre.closedAt;
   state.monthClosures = [cierre, ...(state.monthClosures || []).filter((x) => x.monthKey !== state.currentMonth)].slice(0, 36);
-  logAction('cierre', `Se cerró el mes ${state.currentMonth}`);
+  const arrastrados = (month.gastosFijos || []).filter((g) => !g.pagado && Number(g.monto || 0) > 0).length;
+  const nextKey = applyCloseMonthCarryover(state.currentMonth);
+  logAction('cierre', `Se cerró el mes ${state.currentMonth}` + (arrastrados ? ` y se arrastraron ${arrastrados} gastos fijos pendientes a ${nextKey}` : ''));
   saveSnapshot('Cierre de mes');
   render();
 }
@@ -333,14 +344,65 @@ function saveState() {
   saveSnapshot('Auto');
 }
 
-function cloneFixedExpenses(sourceMonth) {
-  return sortFixedExpensesList((sourceMonth?.gastosFijos || []).map((g) => ({
-    ...g,
+function baseFixedName(g) {
+  return String(g?.nombreBase || g?.nombre || '').replace(/\s*\(deuda arrastrada.*\)$/i, '').trim();
+}
+
+function regularFixedExpensesSource(sourceMonth) {
+  return (sourceMonth?.gastosFijos || []).filter((g) => !g.arrastradoDe).map((g) => ({
     id: uid(),
     nombre: String(g.nombre || ''),
     monto: parseAmountInput(g.monto ?? 0),
     pagado: false,
-  })));
+    arrastradoDe: '',
+    nombreBase: '',
+  }));
+}
+
+function cloneFixedExpenses(sourceMonth) {
+  return sortFixedExpensesList(regularFixedExpensesSource(sourceMonth));
+}
+
+function buildCarryoverFixedExpenses(sourceMonthKey, sourceMonth) {
+  return sortFixedExpensesList((sourceMonth?.gastosFijos || [])
+    .filter((g) => !g.pagado && parseAmountInput(g.monto || 0) > 0 && String(g.nombre || '').trim())
+    .map((g) => ({
+      id: uid(),
+      nombre: `${baseFixedName(g)} (deuda arrastrada ${sourceMonthKey})`,
+      nombreBase: baseFixedName(g),
+      monto: parseAmountInput(g.monto || 0),
+      pagado: false,
+      arrastradoDe: sourceMonthKey,
+    })));
+}
+
+function mergeNextMonthFixedExpenses(baseRegular, carryovers, existingMonth) {
+  const existingNonCarry = (existingMonth?.gastosFijos || []).filter((g) => !g.arrastradoDe);
+  const base = existingMonth?.fixedCustomized && existingNonCarry.length ? existingNonCarry.map((g) => ({ ...g, id: uid() })) : baseRegular;
+  return sortFixedExpensesList([...(base || []), ...(carryovers || [])]);
+}
+
+function nextMonthKey(monthKey) {
+  const [y, m] = String(monthKey).split('-').map(Number);
+  const d = new Date(y, m, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function applyCloseMonthCarryover(monthKey) {
+  const sourceMonth = state.months[monthKey] || baseMonth();
+  const nextKey = nextMonthKey(monthKey);
+  const existingNext = state.months[nextKey] || { movimientos: [] };
+  const baseRegular = cloneFixedExpenses(sourceMonth);
+  const carryovers = buildCarryoverFixedExpenses(monthKey, sourceMonth);
+  state.months[nextKey] = {
+    ...existingNext,
+    fixedCustomized: !!existingNext.fixedCustomized,
+    autoGenerated: true,
+    carryoverGenerated: true,
+    gastosFijos: mergeNextMonthFixedExpenses(baseRegular, carryovers, existingNext),
+    movimientos: Array.isArray(existingNext.movimientos) ? existingNext.movimientos : [],
+  };
+  return nextKey;
 }
 
 function sortFixedExpensesList(items) {
@@ -430,7 +492,7 @@ function shouldResyncMonthFromPrevious(monthKey) {
   const current = state.months[monthKey];
   const prev = state.months[previousMonthKey(monthKey)];
   if (!current || !prev || !hasMeaningfulFixedExpenses(prev)) return false;
-  if (current.fixedCustomized) return false;
+  if (current.fixedCustomized || current.carryoverGenerated) return false;
   if (!isUntouchedMonth(current) && !isLikelyCorruptedAutoMonth(current, prev)) return false;
   if (sameFixedExpenses(current, prev) && hasMeaningfulFixedExpenses(current)) return false;
   return isPlaceholderMonth(current) || isLikelyCorruptedAutoMonth(current, prev) || (current.autoGenerated && !sameFixedExpenses(current, prev));
@@ -440,6 +502,7 @@ function createMonthFromReference(reference) {
   return {
     fixedCustomized: false,
     autoGenerated: true,
+    carryoverGenerated: false,
     gastosFijos: cloneFixedExpenses(reference),
     movimientos: [],
   };
@@ -459,11 +522,13 @@ function ensureMonth(monthKey, sourceMonthKey = state.currentMonth, { forceFromS
 
   if (!Object.prototype.hasOwnProperty.call(existing, 'fixedCustomized')) existing.fixedCustomized = false;
   if (!Object.prototype.hasOwnProperty.call(existing, 'autoGenerated')) existing.autoGenerated = false;
+  if (!Object.prototype.hasOwnProperty.call(existing, 'carryoverGenerated')) existing.carryoverGenerated = false;
   if (shouldResyncMonthFromPrevious(monthKey)) {
     state.months[monthKey] = {
       ...existing,
       fixedCustomized: false,
       autoGenerated: true,
+      carryoverGenerated: false,
       gastosFijos: cloneFixedExpenses(state.months[previousMonthKey(monthKey)]),
       movimientos: Array.isArray(existing.movimientos) ? existing.movimientos : [],
     };
@@ -479,6 +544,7 @@ function ensureMonth(monthKey, sourceMonthKey = state.currentMonth, { forceFromS
       ...existing,
       fixedCustomized: false,
       autoGenerated: true,
+      carryoverGenerated: false,
       gastosFijos: cloneFixedExpenses(reference),
       movimientos: Array.isArray(existing.movimientos) ? existing.movimientos : [],
     };
@@ -498,6 +564,7 @@ function repairCurrentMonthFromPrevious() {
     ...existing,
     fixedCustomized: false,
     autoGenerated: true,
+    carryoverGenerated: false,
     gastosFijos: cloneFixedExpenses(prevMonth),
     movimientos: Array.isArray(existing.movimientos) ? existing.movimientos : [],
   };
@@ -519,6 +586,7 @@ function repairMonthChainFromPrevious() {
         ...month,
         fixedCustomized: false,
         autoGenerated: true,
+        carryoverGenerated: false,
         gastosFijos: cloneFixedExpenses(prev),
         movimientos: Array.isArray(month.movimientos) ? month.movimientos : [],
       };
@@ -846,7 +914,13 @@ function renderDashboard() {
   const closuresEl = document.getElementById('monthClosuresList');
   if (closuresEl) closuresEl.innerHTML = closures.length ? closures.map((c) => `<div class="closure-item"><div><strong>${c.monthKey}</strong></div><div class="closure-meta">Cerrado ${new Date(c.closedAt).toLocaleString('es-AR')} · Caja ${money(c.balanceCajaMes)} · Viajes ${c.viajes}</div></div>`).join('') : '<div class="empty">Todavía no cerraste meses.</div>';
   const auditEl = document.getElementById('auditLogList');
-  if (auditEl) auditEl.innerHTML = (state.auditLog || []).length ? (state.auditLog || []).slice(0, 20).map((a) => `<div class="audit-item"><div><strong>${escapeHtml(a.text)}</strong></div><div class="audit-meta">${new Date(a.at).toLocaleString('es-AR')} · ${escapeHtml(a.type || 'sistema')}</div></div>`).join('') : '<div class="empty">Sin movimientos auditados todavía.</div>';
+  const auditToggleBtn = document.getElementById('auditToggleBtn');
+  const auditItems = state.auditLog || [];
+  if (auditToggleBtn) {
+    auditToggleBtn.textContent = auditItems.length > MAX_AUDIT_PREVIEW ? (auditExpanded ? 'Ver menos' : 'Ver más') : 'Ver más';
+    auditToggleBtn.style.display = auditItems.length > MAX_AUDIT_PREVIEW ? 'inline-flex' : 'none';
+  }
+  if (auditEl) auditEl.innerHTML = auditItems.length ? auditItems.slice(0, auditExpanded ? auditItems.length : MAX_AUDIT_PREVIEW).map((a) => `<div class="audit-item"><div><strong>${escapeHtml(a.text)}</strong></div><div class="audit-meta">${new Date(a.at).toLocaleString('es-AR')} · ${escapeHtml(a.type || 'sistema')}</div></div>`).join('') : '<div class="empty">Sin movimientos auditados todavía.</div>';
   const snapsEl = document.getElementById('snapshotsList');
   if (snapsEl) snapsEl.innerHTML = snapshots.length ? snapshots.slice(0,5).map((sn, idx) => `<div class="snapshot-item"><div><strong>${escapeHtml(sn.label || 'Auto')}</strong></div><div class="snapshot-meta">${new Date(sn.at).toLocaleString('es-AR')}${idx===0 ? ' · último disponible' : ''}</div></div>`).join('') : '<div class="empty">No hay autosnapshots todavía.</div>';
 }
@@ -880,7 +954,7 @@ function renderPlata() {
       <div class="row">
         <div>
           <div class="title">${g.nombre || 'Sin nombre'}</div>
-          <div class="sub">${money(g.monto)} · ${g.pagado ? 'Pagado' : 'Pendiente'}</div>
+          <div class="sub">${money(g.monto)} · ${g.pagado ? 'Pagado' : 'Pendiente'}${g.arrastradoDe ? ` · deuda arrastrada de ${escapeHtml(g.arrastradoDe)}` : ''}</div>
         </div>
         <div class="row-actions">
           <button class="secondary small" onclick="toggleFixedPaid('${g.id}')">${g.pagado ? 'Marcar pendiente' : 'Marcar pagado'}</button>
@@ -1772,8 +1846,15 @@ function viewClientProfile(id) {
   alert(generateClientProfileText(c));
 }
 
+function toggleAuditExpanded() {
+  auditExpanded = !auditExpanded;
+  renderDashboard();
+}
+
 function wireEvents() {
   document.querySelectorAll('.tab').forEach((btn) => btn.addEventListener('click', () => setTab(btn.dataset.tab)));
+  const auditToggleBtn = document.getElementById('auditToggleBtn');
+  if (auditToggleBtn) auditToggleBtn.addEventListener('click', toggleAuditExpanded);
   document.getElementById('nextMonthBtn').addEventListener('click', () => {
     saveState();
     const previousMonth = state.currentMonth;
