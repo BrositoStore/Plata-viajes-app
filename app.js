@@ -1,6 +1,6 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v20';
-const STORAGE_KEYS = ['plata-viajes-pwa-v20','plata-viajes-pwa-v19','plata-viajes-pwa-v18','plata-viajes-pwa-v17','plata-viajes-pwa-v16','plata-viajes-pwa-v15','plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
-const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v20';
+const STORAGE_KEY = 'plata-viajes-pwa-v22';
+const STORAGE_KEYS = ['plata-viajes-pwa-v22','plata-viajes-pwa-v21','plata-viajes-pwa-v20','plata-viajes-pwa-v19','plata-viajes-pwa-v18','plata-viajes-pwa-v17','plata-viajes-pwa-v16','plata-viajes-pwa-v15','plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
+const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v22';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -75,6 +75,10 @@ const DEFAULT_MAINTENANCE_TYPES = [
   'Aceite caja de cambios',
 ];
 
+const DEFAULT_VEHICLES = [
+  { id: 'veh-berlingo', nombre: 'Berlingo' },
+];
+
 const parseKmInput = (value) => {
   if (value === null || value === undefined || value === '') return 0;
   const cleaned = String(value).trim().replace(/\./g, '').replace(/,/g, '.');
@@ -105,6 +109,8 @@ const initialState = () => {
     compromisos: [],
     tripExpenseCategories: ['Combustible', 'Peajes', 'Comida', 'Cadetería', 'Cochera', 'Repuestos', 'Otros'],
     maintenanceTypes: [...DEFAULT_MAINTENANCE_TYPES],
+    vehicles: DEFAULT_VEHICLES.map((v) => ({ ...v })),
+    currentMaintenanceVehicleId: DEFAULT_VEHICLES[0].id,
     maintenanceItems: [],
     clientesFrecuentes: [],
     deudores: [],
@@ -138,9 +144,21 @@ function migrateState(parsed) {
   if (!parsed || typeof parsed !== 'object') return initialState();
   if (!parsed.tripExpenseCategories) parsed.tripExpenseCategories = ['Combustible', 'Peajes', 'Comida', 'Cadetería', 'Cochera', 'Repuestos', 'Otros'];
   if (!parsed.maintenanceTypes) parsed.maintenanceTypes = [...DEFAULT_MAINTENANCE_TYPES];
+  if (!parsed.vehicles || !Array.isArray(parsed.vehicles) || !parsed.vehicles.length) {
+    parsed.vehicles = DEFAULT_VEHICLES.map((v) => ({ ...v }));
+  } else {
+    parsed.vehicles = parsed.vehicles.map((v, idx) => ({
+      id: v.id || `veh-${idx + 1}`,
+      nombre: String(v.nombre || `Vehículo ${idx + 1}`).trim(),
+    }));
+  }
+  if (!parsed.currentMaintenanceVehicleId || !parsed.vehicles.some((v) => v.id === parsed.currentMaintenanceVehicleId)) {
+    parsed.currentMaintenanceVehicleId = parsed.vehicles[0].id;
+  }
   if (!parsed.maintenanceItems) parsed.maintenanceItems = [];
   parsed.maintenanceItems = (parsed.maintenanceItems || []).map((m) => ({
     id: m.id || uid(),
+    vehicleId: m.vehicleId || parsed.currentMaintenanceVehicleId || parsed.vehicles[0].id,
     tipo: String(m.tipo || ''),
     fecha: m.fecha || today(),
     km: parseKmInput(m.km || 0),
@@ -327,6 +345,314 @@ function addQuickExpense(category, defaultDetail='') {
   currentTrip().gastos.unshift({ id: uid(), categoria: category, detalle, monto });
   logAction('viaje', `Se agregó gasto rápido ${category} por ${money(monto)}`);
   render();
+}
+
+
+function setAssistantFeedback(message, type = 'info') {
+  const el = document.getElementById('assistantFeedback');
+  if (!el) return;
+  el.textContent = message || '';
+  el.dataset.type = type;
+}
+
+function normalizeAssistantClientName(name) {
+  const raw = String(name || '').trim();
+  if (!raw) return '';
+  const pools = [
+    ...(state.clientesFrecuentes || []).map((c) => c.nombre),
+    ...(currentTrip().pasajeros || []).map((i) => i.cliente),
+    ...(currentTrip().pedidos || []).map((i) => i.cliente),
+    ...(state.deudores || []).map((d) => d.nombre),
+  ].filter(Boolean);
+  const exact = pools.find((n) => norm(n) === norm(raw));
+  if (exact) return exact;
+  const contains = pools.find((n) => norm(n).includes(norm(raw)) || norm(raw).includes(norm(n)));
+  return contains || raw;
+}
+
+function ensureAssistantClient(clientName) {
+  const normalized = normalizeAssistantClientName(clientName);
+  if (!normalized) return '';
+  if (!(state.clientesFrecuentes || []).some((c) => norm(c.nombre) === norm(normalized))) {
+    state.clientesFrecuentes.unshift({ id: uid(), nombre: normalized, telefono: '', notas: '' });
+  }
+  return normalized;
+}
+
+function applyPaymentToTripClient(clientName, amount) {
+  let remaining = parseAmountInput(amount || 0);
+  if (!remaining) return 0;
+  const trip = currentTrip();
+  const sections = ['pasajeros', 'pedidos'];
+  let applied = 0;
+  sections.forEach((section) => {
+    (trip[section] || []).forEach((item) => {
+      if (remaining <= 0) return;
+      normalizeTripLine(item);
+      if (norm(item.cliente) !== norm(clientName)) return;
+      const amounts = lineAmounts(item);
+      if (amounts.pendiente <= 0) return;
+      const part = Math.min(remaining, amounts.pendiente);
+      item.cobradoActual = amounts.cobrado + part;
+      item.pagado = item.cobradoActual >= item.cobro;
+      item.pagos.unshift({ id: uid(), fecha: today(), monto: part, texto: 'Pago rápido' });
+      remaining -= part;
+      applied += part;
+    });
+  });
+  return applied;
+}
+
+function applyPaymentToDebtor(clientName, amount) {
+  let remaining = parseAmountInput(amount || 0);
+  if (!remaining) return 0;
+  let applied = 0;
+  (state.deudores || []).forEach((d) => {
+    if (remaining <= 0) return;
+    if (norm(d.nombre) !== norm(clientName)) return;
+    const saldo = Number(d.saldo || 0);
+    if (saldo <= 0) return;
+    const part = Math.min(remaining, saldo);
+    d.saldo = saldo - part;
+    d.historial = d.historial || [];
+    d.historial.unshift({ id: uid(), fecha: today(), monto: part, texto: 'Pago rápido' });
+    remaining -= part;
+    applied += part;
+  });
+  state.deudores = (state.deudores || []).filter((d) => Number(d.saldo || 0) > 0);
+  return applied;
+}
+
+function addClientFromCommand({ nombre, telefono = '', notas = '' }) {
+  if (!nombre) return;
+  if ((state.clientesFrecuentes || []).some((c) => norm(c.nombre) === norm(nombre))) return;
+  state.clientesFrecuentes.unshift({ id: uid(), nombre, telefono, notas });
+  logAction('cliente', `Se agregó cliente ${nombre}`);
+}
+
+function processAssistantCommand(rawText) {
+  const text = String(rawText || '').trim();
+  if (!text) {
+    setAssistantFeedback('Escribí una orden para procesar.', 'warning');
+    return;
+  }
+
+  const lower = text.toLowerCase();
+
+  try {
+    if (lower.startsWith('gasto ')) {
+      const payload = text.slice(6).trim();
+      const subparts = payload.split('|').map((p) => p.trim());
+      const category = subparts[0] || 'Otros';
+      const monto = parseAmountInput(subparts[1] || 0);
+      const detalle = subparts[2] || '';
+      if (!monto) throw new Error('Falta el monto del gasto. Usá: gasto Categoría | monto | detalle');
+      currentTrip().gastos.unshift({ id: uid(), categoria: category, detalle, monto });
+      if (!(state.tripExpenseCategories || []).includes(category)) state.tripExpenseCategories.push(category);
+      logAction('carga rápida', `Gasto rápido ${category} por ${money(monto)}`);
+      setAssistantFeedback(`Listo: agregué gasto ${category} por ${money(monto)}.`, 'success');
+      document.getElementById('assistantInput').value = '';
+      render();
+      return;
+    }
+
+    if (lower.startsWith('pedido ')) {
+      const payload = text.slice(7).trim();
+      const subparts = payload.split('|').map((p) => p.trim());
+      const cliente = ensureAssistantClient(subparts[0]);
+      const detalle = subparts[1] || '';
+      const cobro = parseAmountInput(subparts[2] || 0);
+      const cobradoInicial = Math.max(0, Math.min(parseAmountInput(subparts[3] || 0), cobro));
+      if (!cliente || !cobro) throw new Error('Pedido incompleto. Usá: pedido Nombre | detalle | total | cobrado');
+      currentTrip().pedidos.unshift(normalizeTripLine({
+        id: uid(),
+        cliente,
+        detalle,
+        cobro,
+        cobradoActual: cobradoInicial,
+        pagos: cobradoInicial > 0 ? [{ id: uid(), fecha: today(), monto: cobradoInicial, texto: cobradoInicial >= cobro ? 'Pago inicial completo' : 'Pago inicial parcial' }] : [],
+      }));
+      logAction('carga rápida', `Pedido rápido para ${cliente} por ${money(cobro)}`);
+      setAssistantFeedback(`Listo: agregué pedido de ${cliente} por ${money(cobro)}.`, 'success');
+      document.getElementById('assistantInput').value = '';
+      render();
+      return;
+    }
+
+    if (lower.startsWith('pasajero ')) {
+      const payload = text.slice(9).trim();
+      const subparts = payload.split('|').map((p) => p.trim());
+      const cliente = ensureAssistantClient(subparts[0]);
+      const detalle = subparts[1] || '';
+      const cobro = parseAmountInput(subparts[2] || 0);
+      const cobradoInicial = Math.max(0, Math.min(parseAmountInput(subparts[3] || 0), cobro));
+      if (!cliente || !cobro) throw new Error('Pasajero incompleto. Usá: pasajero Nombre | destino | total | cobrado');
+      currentTrip().pasajeros.unshift(normalizeTripLine({
+        id: uid(),
+        cliente,
+        detalle,
+        cobro,
+        cobradoActual: cobradoInicial,
+        pagos: cobradoInicial > 0 ? [{ id: uid(), fecha: today(), monto: cobradoInicial, texto: cobradoInicial >= cobro ? 'Pago inicial completo' : 'Pago inicial parcial' }] : [],
+      }));
+      logAction('carga rápida', `Pasajero rápido ${cliente} por ${money(cobro)}`);
+      setAssistantFeedback(`Listo: agregué pasajero ${cliente} por ${money(cobro)}.`, 'success');
+      document.getElementById('assistantInput').value = '';
+      render();
+      return;
+    }
+
+    if (lower.startsWith('movimiento ')) {
+      const payload = text.slice(11).trim();
+      const subparts = payload.split('|').map((p) => p.trim());
+      const tipo = (subparts[0] || 'gasto').toLowerCase();
+      const categoria = subparts[1] || '';
+      const monto = parseAmountInput(subparts[2] || 0);
+      const descripcion = subparts[3] || '';
+      if (!categoria || !monto) throw new Error('Movimiento incompleto. Usá: movimiento gasto | categoría | monto | detalle');
+      currentMonthData().movimientos.unshift({ id: uid(), fecha: today(), tipo, categoria, descripcion, monto });
+      logAction('carga rápida', `Movimiento ${categoria} por ${money(monto)}`);
+      setAssistantFeedback(`Listo: agregué movimiento ${categoria} por ${money(monto)}.`, 'success');
+      document.getElementById('assistantInput').value = '';
+      render();
+      return;
+    }
+
+    if (lower.startsWith('fijo ')) {
+      const payload = text.slice(5).trim();
+      const subparts = payload.split('|').map((p) => p.trim());
+      const nombre = subparts[0] || '';
+      const monto = parseAmountInput(subparts[1] || 0);
+      if (!nombre || !monto) throw new Error('Usá: fijo Nombre | monto');
+      markCurrentMonthFixedCustomized();
+      currentMonthData().gastosFijos = sortFixedExpensesList([...(currentMonthData().gastosFijos || []), { id: uid(), nombre, monto, pagado: false }]);
+      logAction('carga rápida', `Gasto fijo ${nombre} por ${money(monto)}`);
+      setAssistantFeedback(`Listo: agregué gasto fijo ${nombre} por ${money(monto)}.`, 'success');
+      document.getElementById('assistantInput').value = '';
+      render();
+      return;
+    }
+
+    if (lower.startsWith('cliente ') || lower.startsWith('nuevo cliente ')) {
+      const payload = lower.startsWith('nuevo cliente ') ? text.slice(14).trim() : text.slice(8).trim();
+      const subparts = payload.split('|').map((p) => p.trim());
+      const nombre = subparts[0] || '';
+      const telefono = subparts[1] || '';
+      const notas = subparts[2] || '';
+      if (!nombre) throw new Error('Usá: cliente Nombre | teléfono | notas');
+      addClientFromCommand({ nombre, telefono, notas });
+      setAssistantFeedback(`Listo: agregué cliente ${nombre}.`, 'success');
+      document.getElementById('assistantInput').value = '';
+      render();
+      return;
+    }
+
+    if (lower.startsWith('mantenimiento ')) {
+      const payload = text.slice(14).trim();
+      const subparts = payload.split('|').map((p) => p.trim());
+      const tipo = subparts[0] || '';
+      const fecha = subparts[1] || today();
+      const km = parseKmInput(subparts[2] || 0);
+      const detalle = subparts[3] || '';
+      const vehiculoNombre = subparts[4] || currentMaintenanceVehicle().nombre;
+      if (!tipo || !fecha || !km) throw new Error('Usá: mantenimiento Tipo | fecha | km | detalle | vehículo(opcional)');
+      if (!(state.maintenanceTypes || []).includes(tipo)) state.maintenanceTypes.push(tipo);
+      let vehicle = (state.vehicles || []).find((v) => norm(v.nombre) === norm(vehiculoNombre));
+      if (!vehicle) {
+        vehicle = { id: uid(), nombre: vehiculoNombre };
+        state.vehicles.unshift(vehicle);
+      }
+      state.currentMaintenanceVehicleId = vehicle.id;
+      state.maintenanceItems.unshift({ id: uid(), vehicleId: vehicle.id, tipo, fecha, km, detalle });
+      state.maintenanceItems.sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)) || Number(b.km||0)-Number(a.km||0));
+      logAction('carga rápida', `Mantenimiento ${tipo} en ${km} km para ${vehicle.nombre}`);
+      setAssistantFeedback(`Listo: agregué mantenimiento ${tipo} en ${km} km para ${vehicle.nombre}.`, 'success');
+      document.getElementById('assistantInput').value = '';
+      render();
+      return;
+    }
+
+    const pagoMatch = text.match(/^(.+?)\s+pag[oó]\s+(\d[\d\.,]*)$/i);
+    if (pagoMatch) {
+      const clientName = normalizeAssistantClientName(pagoMatch[1]);
+      const amount = parseAmountInput(pagoMatch[2]);
+      if (!clientName || !amount) throw new Error('No pude entender el pago.');
+      let applied = applyPaymentToTripClient(clientName, amount);
+      if (applied < amount) applied += applyPaymentToDebtor(clientName, amount - applied);
+      if (!applied) throw new Error(`No encontré pendientes para ${clientName}.`);
+      logAction('carga rápida', `${clientName} pagó ${money(applied)}`);
+      setAssistantFeedback(`Listo: registré ${money(applied)} para ${clientName}.`, 'success');
+      document.getElementById('assistantInput').value = '';
+      render();
+      return;
+    }
+
+    if (lower.startsWith('nota viaje')) {
+      const note = text.replace(/^nota viaje\s*\|?/i, '').trim();
+      currentTrip().notas = note;
+      logAction('carga rápida', 'Se actualizó la nota del viaje');
+      setAssistantFeedback('Listo: actualicé la nota del viaje.', 'success');
+      document.getElementById('assistantInput').value = '';
+      render();
+      return;
+    }
+
+    if (lower === 'cerrar viaje') {
+      closeTrip();
+      setAssistantFeedback('Intenté cerrar el viaje actual.', 'success');
+      document.getElementById('assistantInput').value = '';
+      return;
+    }
+
+    if (lower === 'nuevo mes') {
+      nextMonth();
+      setAssistantFeedback(`Listo: pasé al mes ${state.currentMonth}.`, 'success');
+      document.getElementById('assistantInput').value = '';
+      return;
+    }
+
+    throw new Error('No entendí la orden. Probá con: gasto, pedido, pasajero, movimiento, fijo, cliente, mantenimiento, “Nombre pagó 12000”, nota viaje o cerrar viaje.');
+  } catch (err) {
+    setAssistantFeedback(err.message || 'No pude procesar la orden.', 'error');
+  }
+}
+
+let assistantRecognition = null;
+function toggleAssistantVoice() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    setAssistantFeedback('Este navegador no soporta dictado por voz.', 'warning');
+    return;
+  }
+  const btn = document.getElementById('assistantVoiceBtn');
+  const input = document.getElementById('assistantInput');
+  if (assistantRecognition) {
+    assistantRecognition.stop();
+    assistantRecognition = null;
+    if (btn) btn.textContent = 'Hablar';
+    return;
+  }
+  assistantRecognition = new SpeechRecognition();
+  assistantRecognition.lang = 'es-AR';
+  assistantRecognition.interimResults = false;
+  assistantRecognition.maxAlternatives = 1;
+  assistantRecognition.onstart = () => {
+    if (btn) btn.textContent = 'Escuchando...';
+    setAssistantFeedback('Escuchando...', 'info');
+  };
+  assistantRecognition.onresult = (event) => {
+    const transcript = Array.from(event.results).map((r) => r[0]?.transcript || '').join(' ').trim();
+    if (input) input.value = transcript;
+    processAssistantCommand(transcript);
+  };
+  assistantRecognition.onerror = () => {
+    setAssistantFeedback('No pude tomar el dictado. Probá de nuevo.', 'error');
+  };
+  assistantRecognition.onend = () => {
+    assistantRecognition = null;
+    if (btn) btn.textContent = 'Hablar';
+  };
+  assistantRecognition.start();
 }
 
 function duplicateLastTrip() {
@@ -651,6 +977,19 @@ function currentMonthData() {
 function currentTrip() {
   if (!state.viajeActual) state.viajeActual = emptyTrip();
   return state.viajeActual;
+}
+
+function currentMaintenanceVehicleId() {
+  if (!state.vehicles || !state.vehicles.length) state.vehicles = DEFAULT_VEHICLES.map((v) => ({ ...v }));
+  if (!state.currentMaintenanceVehicleId || !state.vehicles.some((v) => v.id === state.currentMaintenanceVehicleId)) {
+    state.currentMaintenanceVehicleId = state.vehicles[0].id;
+  }
+  return state.currentMaintenanceVehicleId;
+}
+
+function currentMaintenanceVehicle() {
+  const id = currentMaintenanceVehicleId();
+  return (state.vehicles || []).find((v) => v.id === id) || state.vehicles[0];
 }
 
 function setTab(tabName) {
@@ -1078,32 +1417,97 @@ function renderPlata() {
 }
 
 
-function getMaintenanceLastByType() {
+
+function getMaintenanceLastByType(vehicleId) {
   const grouped = {};
   (state.maintenanceTypes || DEFAULT_MAINTENANCE_TYPES).forEach((t) => { grouped[t] = null; });
-  (state.maintenanceItems || []).forEach((item) => {
+  (state.maintenanceItems || []).filter((item) => item.vehicleId === vehicleId).forEach((item) => {
     if (!grouped[item.tipo]) grouped[item.tipo] = item;
   });
   return grouped;
+}
+
+function addVehicleFromForm(e) {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const fd = new FormData(form);
+  const nombre = String(fd.get('nombre') || '').trim();
+  if (!nombre) return alert('Escribí el nombre del vehículo.');
+  if ((state.vehicles || []).some((v) => norm(v.nombre) === norm(nombre))) return alert('Ese vehículo ya existe.');
+  const vehicle = { id: uid(), nombre };
+  state.vehicles.unshift(vehicle);
+  state.currentMaintenanceVehicleId = vehicle.id;
+  logAction('mantenimiento', `Se agregó el vehículo ${nombre}`);
+  form.reset();
+  render();
+}
+
+function removeVehicle(id) {
+  const vehicle = (state.vehicles || []).find((v) => v.id === id);
+  if (!vehicle) return;
+  const items = (state.maintenanceItems || []).filter((m) => m.vehicleId === id);
+  if (items.length) return alert('No podés borrar un vehículo que ya tiene mantenimientos cargados.');
+  if ((state.vehicles || []).length <= 1) return alert('Necesitás dejar al menos un vehículo.');
+  if (!confirm(`¿Borrar vehículo ${vehicle.nombre}?`)) return;
+  state.vehicles = (state.vehicles || []).filter((v) => v.id !== id);
+  if (state.currentMaintenanceVehicleId === id) state.currentMaintenanceVehicleId = state.vehicles[0].id;
+  logAction('mantenimiento', `Se borró el vehículo ${vehicle.nombre}`);
+  render();
 }
 
 function renderMaintenance() {
   const typeSelect = document.getElementById('maintenanceTypeSelect');
   if (!typeSelect) return;
   const types = state.maintenanceTypes || DEFAULT_MAINTENANCE_TYPES;
+  const vehicles = state.vehicles || DEFAULT_VEHICLES;
+  const activeVehicleId = currentMaintenanceVehicleId();
+  const activeVehicle = currentMaintenanceVehicle();
+
+  const vehicleFilter = document.getElementById('maintenanceVehicleFilter');
+  const vehicleSelect = document.getElementById('maintenanceVehicleSelect');
+  if (vehicleFilter) {
+    vehicleFilter.innerHTML = vehicles.map((v) => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.nombre)}</option>`).join('');
+    vehicleFilter.value = activeVehicleId;
+  }
+  if (vehicleSelect) {
+    vehicleSelect.innerHTML = vehicles.map((v) => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.nombre)}</option>`).join('');
+    vehicleSelect.value = activeVehicleId;
+  }
+
   typeSelect.innerHTML = types.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
-  const items = (state.maintenanceItems || []).slice().sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)) || Number(b.km||0)-Number(a.km||0));
-  const latestByType = getMaintenanceLastByType();
+  const items = (state.maintenanceItems || []).filter((item) => item.vehicleId === activeVehicleId).slice().sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)) || Number(b.km||0)-Number(a.km||0));
+  const latestByType = getMaintenanceLastByType(activeVehicleId);
   const total = items.length;
   const latest = items[0];
   const maxKm = items.reduce((mx, item) => Math.max(mx, Number(item.km || 0)), 0);
   const summaryEl = document.getElementById('maintenanceSummary');
   if (summaryEl) summaryEl.innerHTML = [
+    statCard('Vehículo activo', activeVehicle ? activeVehicle.nombre : 'Sin datos'),
     statCard('Registros', String(total)),
     statCard('Último mantenimiento', latest ? latest.tipo : 'Sin datos', latest ? `${latest.fecha} · ${Number(latest.km || 0).toLocaleString('es-AR')} km` : ''),
     statCard('Último km cargado', maxKm ? `${Number(maxKm).toLocaleString('es-AR')} km` : '0 km'),
-    statCard('Tipos controlados', String(types.length)),
   ].join('');
+
+  const vehiclesList = document.getElementById('maintenanceVehiclesList');
+  if (vehiclesList) {
+    vehiclesList.innerHTML = '';
+    vehicles.forEach((vehicle) => {
+      const count = (state.maintenanceItems || []).filter((m) => m.vehicleId === vehicle.id).length;
+      vehiclesList.insertAdjacentHTML('beforeend', `
+        <div class="row ${vehicle.id === activeVehicleId ? 'row-paid' : ''}">
+          <div>
+            <div class="title">${escapeHtml(vehicle.nombre)}</div>
+            <div class="sub">${count} registros</div>
+          </div>
+          <div class="row-actions">
+            ${vehicle.id === activeVehicleId ? '<span class="badge success">Activo</span>' : `<button class="secondary small" onclick="selectMaintenanceVehicle('${vehicle.id}')">Ver</button>`}
+            <button class="secondary small" onclick="removeVehicle('${vehicle.id}')">Borrar</button>
+          </div>
+        </div>
+      `);
+    });
+  }
+
   const lastEl = document.getElementById('maintenanceLastByType');
   if (lastEl) {
     lastEl.innerHTML = '';
@@ -1123,9 +1527,10 @@ function renderMaintenance() {
       ` : `<div class="row"><div><div class="title">${escapeHtml(type)}</div><div class="sub">Sin registros todavía</div></div></div>`);
     });
   }
+
   const listEl = document.getElementById('maintenanceList');
   if (listEl) {
-    listEl.innerHTML = items.length ? '' : emptyHtml('Todavía no cargaste mantenimientos.');
+    listEl.innerHTML = items.length ? '' : emptyHtml(`Todavía no cargaste mantenimientos para ${activeVehicle ? activeVehicle.nombre : 'este vehículo'}.`);
     items.forEach((item) => {
       listEl.insertAdjacentHTML('beforeend', `
         <div class="row">
@@ -1148,14 +1553,20 @@ function addMaintenanceFromForm(e) {
   e.preventDefault();
   const form = e.currentTarget;
   const fd = new FormData(form);
-  const tipo = String(fd.get('tipo') || '').trim();
+  const tipoBase = String(fd.get('tipo') || '').trim();
+  const tipoLibre = String(fd.get('tipoLibre') || '').trim();
+  const tipo = tipoLibre || tipoBase;
   const fecha = String(fd.get('fecha') || '').trim() || today();
   const km = parseKmInput(fd.get('km'));
   const detalle = String(fd.get('detalle') || '').trim();
+  const vehicleId = String(fd.get('vehicleId') || currentMaintenanceVehicleId()).trim();
   if (!tipo || !fecha || !km) return alert('Completá tipo, fecha y kilometraje.');
-  state.maintenanceItems.unshift({ id: uid(), tipo, fecha, km, detalle });
+  if (!(state.maintenanceTypes || []).includes(tipo)) state.maintenanceTypes.push(tipo);
+  state.currentMaintenanceVehicleId = vehicleId;
+  state.maintenanceItems.unshift({ id: uid(), vehicleId, tipo, fecha, km, detalle });
   state.maintenanceItems.sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)) || Number(b.km||0)-Number(a.km||0));
-  logAction('mantenimiento', `Se agregó ${tipo} en ${fecha} (${Number(km).toLocaleString('es-AR')} km)`);
+  const vehicle = (state.vehicles || []).find((v) => v.id === vehicleId);
+  logAction('mantenimiento', `Se agregó ${tipo} en ${fecha} (${Number(km).toLocaleString('es-AR')} km)${vehicle ? ` para ${vehicle.nombre}` : ''}`);
   form.reset();
   const dateInput = form.querySelector('[name="fecha"]');
   if (dateInput) dateInput.value = today();
@@ -1165,17 +1576,31 @@ function addMaintenanceFromForm(e) {
 function editMaintenanceItem(id) {
   const item = (state.maintenanceItems || []).find((m) => m.id === id);
   if (!item) return;
+  const tipo = prompt('Tipo de mantenimiento / reparación:', item.tipo || '');
+  if (tipo === null) return;
   const fecha = prompt('Fecha (YYYY-MM-DD):', item.fecha || today());
   if (fecha === null) return;
   const km = prompt('Kilometraje:', String(item.km || ''));
   if (km === null) return;
   const detalle = prompt('Detalle / observación:', item.detalle || '');
   if (detalle === null) return;
+  const currentVehicle = (state.vehicles || []).find((v) => v.id === item.vehicleId);
+  const vehiculoNombre = prompt('Vehículo:', currentVehicle ? currentVehicle.nombre : currentMaintenanceVehicle().nombre);
+  if (vehiculoNombre === null) return;
+  let vehicle = (state.vehicles || []).find((v) => norm(v.nombre) === norm(vehiculoNombre));
+  if (!vehicle) {
+    vehicle = { id: uid(), nombre: vehiculoNombre.trim() || 'Vehículo' };
+    state.vehicles.unshift(vehicle);
+  }
+  item.vehicleId = vehicle.id;
+  item.tipo = tipo.trim() || item.tipo;
   item.fecha = fecha || item.fecha;
   item.km = parseKmInput(km);
   item.detalle = detalle.trim();
+  if (!(state.maintenanceTypes || []).includes(item.tipo)) state.maintenanceTypes.push(item.tipo);
   state.maintenanceItems.sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)) || Number(b.km||0)-Number(a.km||0));
-  logAction('mantenimiento', `Se editó ${item.tipo} (${item.fecha} · ${Number(item.km || 0).toLocaleString('es-AR')} km)`);
+  state.currentMaintenanceVehicleId = vehicle.id;
+  logAction('mantenimiento', `Se editó ${item.tipo} (${item.fecha} · ${Number(item.km || 0).toLocaleString('es-AR')} km) para ${vehicle.nombre}`);
   render();
 }
 
@@ -1184,6 +1609,11 @@ function removeMaintenanceItem(id) {
   state.maintenanceItems = (state.maintenanceItems || []).filter((m) => m.id !== id);
   if (item) logAction('mantenimiento', `Se borró ${item.tipo} (${item.fecha})`);
   render();
+}
+
+function selectMaintenanceVehicle(id) {
+  state.currentMaintenanceVehicleId = id;
+  renderMaintenance();
 }
 
 function renderViajes() {
@@ -2061,6 +2491,10 @@ function wireEvents() {
     if (dateInput) dateInput.value = today();
     maintenanceForm.addEventListener('submit', addMaintenanceFromForm);
   }
+  const maintenanceVehicleFilter = document.getElementById('maintenanceVehicleFilter');
+  if (maintenanceVehicleFilter) maintenanceVehicleFilter.addEventListener('change', (e) => { state.currentMaintenanceVehicleId = e.target.value; renderMaintenance(); });
+  const addVehicleForm = document.getElementById('addVehicleForm');
+  if (addVehicleForm) addVehicleForm.addEventListener('submit', addVehicleFromForm);
 
   document.querySelectorAll('.trip-line-form').forEach((form) => form.addEventListener('submit', addTripLineFromForm));
   document.getElementById('tripExpenseForm').addEventListener('submit', addTripExpenseFromForm);
@@ -2122,6 +2556,8 @@ window.setClientPaidStatus = setClientPaidStatus;
 window.copyClientTripSummary = copyClientTripSummary;
 window.applyClientPayment = applyClientPayment;
 window.copyMonthTripSummary = copyMonthTripSummary;
+window.selectMaintenanceVehicle = selectMaintenanceVehicle;
+window.removeVehicle = removeVehicle;
 window.loadTripFromHistory = loadTripFromHistory;
 window.settleDebtor = settleDebtor;
 window.copyClientHistorySummary = copyClientHistorySummary;

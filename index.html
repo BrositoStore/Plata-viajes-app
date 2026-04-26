@@ -328,22 +328,42 @@
       <section id="tab-mantenimiento" class="tab-panel">
         <div class="card">
           <div class="card-head"><h2>Resumen de mantenimiento</h2></div>
-          <div class="card-body">
+          <div class="card-body stack">
+            <div class="grid-form">
+              <select id="maintenanceVehicleFilter"></select>
+            </div>
+            <div class="field-hint">Elegí el vehículo para ver su ficha de mantenimiento.</div>
             <div id="maintenanceSummary" class="stats-grid compact"></div>
           </div>
         </div>
 
-        <div class="card">
-          <div class="card-head"><h2>Registrar mantenimiento</h2></div>
-          <div class="card-body">
-            <form id="maintenanceForm" class="grid-form">
-              <select name="tipo" id="maintenanceTypeSelect"></select>
-              <input name="fecha" type="date" />
-              <input name="km" type="number" placeholder="Kilometraje" />
-              <input name="detalle" placeholder="Detalle / observación" />
-              <button type="submit">Agregar registro</button>
-            </form>
-            <div class="field-hint">Cargá fecha y kilometraje para controlar cambios de aceite, filtros y aceite de caja.</div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>Vehículos</h2></div>
+            <div class="card-body stack">
+              <form id="addVehicleForm" class="grid-form">
+                <input name="nombre" placeholder="Agregar vehículo (ej. Berlingo, Partner, Kangoo)" />
+                <button type="submit">Agregar vehículo</button>
+              </form>
+              <div class="field-hint">Cada vehículo tiene su propia ficha de mantenimiento.</div>
+              <div id="maintenanceVehiclesList" class="stack"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Registrar mantenimiento o reparación</h2></div>
+            <div class="card-body stack">
+              <form id="maintenanceForm" class="grid-form">
+                <select name="vehicleId" id="maintenanceVehicleSelect"></select>
+                <select name="tipo" id="maintenanceTypeSelect"></select>
+                <input name="tipoLibre" placeholder="Tipo libre / reparación (opcional)" />
+                <input name="fecha" type="date" />
+                <input name="km" type="number" placeholder="Kilometraje" />
+                <input name="detalle" placeholder="Detalle / observación" />
+                <button type="submit">Agregar registro</button>
+              </form>
+              <div class="field-hint">Podés usar tipos fijos o cargar reparaciones libres, como bolilleros, tren delantero, frenos o lo que necesites.</div>
+            </div>
           </div>
         </div>
 
