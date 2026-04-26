@@ -1,6 +1,6 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v17';
-const STORAGE_KEYS = ['plata-viajes-pwa-v17','plata-viajes-pwa-v16','plata-viajes-pwa-v15','plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
-const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v17';
+const STORAGE_KEY = 'plata-viajes-pwa-v18';
+const STORAGE_KEYS = ['plata-viajes-pwa-v18','plata-viajes-pwa-v17','plata-viajes-pwa-v16','plata-viajes-pwa-v15','plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
+const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v18';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -231,15 +231,16 @@ function validateBeforeCloseTrip(trip) {
 }
 
 function closeCurrentMonth() {
+  const monthKey = state.currentMonth;
   const month = currentMonthData();
   const tripSummary = getCurrentMonthTripSummary();
   const totalIngresos = (month.movimientos || []).filter((m) => m.tipo === 'ingreso').reduce((a, m) => a + Number(m.monto || 0), 0);
   const totalGastos = (month.movimientos || []).filter((m) => m.tipo === 'gasto').reduce((a, m) => a + Number(m.monto || 0), 0);
   const totalPagadoFijos = (month.gastosFijos || []).filter((g) => g.pagado).reduce((a, g) => a + Number(g.monto || 0), 0);
-  const compromisosPagados = (state.compromisos || []).reduce((a, c) => a + (c.historial || []).filter((h) => toMonthKey(h.fecha) === state.currentMonth).reduce((s, h) => s + Number(h.monto || 0), 0), 0);
+  const compromisosPagados = (state.compromisos || []).reduce((a, c) => a + (c.historial || []).filter((h) => toMonthKey(h.fecha) === monthKey).reduce((s, h) => s + Number(h.monto || 0), 0), 0);
   const cierre = {
     id: uid(),
-    monthKey: state.currentMonth,
+    monthKey,
     closedAt: new Date().toISOString(),
     totalIngresos, totalGastos, totalPagadoFijos, compromisosPagados,
     viajes: tripSummary.cantidad,
@@ -247,17 +248,20 @@ function closeCurrentMonth() {
     tripGastos: tripSummary.gastos, tripGananciaContable: tripSummary.utilidad, tripCaja: tripSummary.caja,
     balanceCajaMes: totalIngresos - totalGastos - totalPagadoFijos,
   };
-  if (!confirm(`Cerrar ${state.currentMonth}?
+  if (!confirm(`Cerrar ${monthKey}?
 Caja del mes: ${money(cierre.balanceCajaMes)}
 Viajes cobrados: ${money(cierre.tripCobrado)}
 Pendiente: ${money(cierre.tripPendiente)}`)) return;
   month.closedAt = cierre.closedAt;
-  state.monthClosures = [cierre, ...(state.monthClosures || []).filter((x) => x.monthKey !== state.currentMonth)].slice(0, 36);
-  const arrastrados = (month.gastosFijos || []).filter((g) => !g.pagado && Number(g.monto || 0) > 0).length;
-  const nextKey = applyCloseMonthCarryover(state.currentMonth);
-  logAction('cierre', `Se cerró el mes ${state.currentMonth}` + (arrastrados ? ` y se arrastraron ${arrastrados} gastos fijos pendientes a ${nextKey}` : ''));
+  state.monthClosures = [cierre, ...(state.monthClosures || []).filter((x) => x.monthKey !== monthKey)].slice(0, 36);
+  const result = applyCloseMonthCarryover(monthKey);
+  state.currentMonth = result.nextKey;
+  logAction('cierre', `Se cerró el mes ${monthKey}` + (result.carryoversCount ? ` y se pasaron ${result.carryoversCount} gastos fijos impagos a compromisos` : '') + `. Ahora estás en ${result.nextKey}.`);
   saveSnapshot('Cierre de mes');
   render();
+  alert(`Mes ${monthKey} cerrado.
+${result.carryoversCount ? `${result.carryoversCount} gastos fijos impagos pasaron a compromisos.` : 'No había gastos fijos impagos para arrastrar.'}
+Ahora estás en ${result.nextKey}.`);
 }
 
 function getCurrentMonthTripSummary() {
@@ -376,6 +380,21 @@ function buildCarryoverFixedExpenses(sourceMonthKey, sourceMonth) {
     })));
 }
 
+function buildCarryoverCommitments(sourceMonthKey, sourceMonth) {
+  return (sourceMonth?.gastosFijos || [])
+    .filter((g) => !g.pagado && parseAmountInput(g.monto || 0) > 0 && String(g.nombre || '').trim())
+    .map((g) => ({
+      id: uid(),
+      tipo: 'saldo',
+      nombre: `${baseFixedName(g)} · deuda arrastrada ${sourceMonthKey}`,
+      saldoPendiente: parseAmountInput(g.monto || 0),
+      historial: [{ id: uid(), fecha: today(), monto: parseAmountInput(g.monto || 0), texto: `Arrastre automático desde ${sourceMonthKey}` }],
+      carryoverSourceMonth: sourceMonthKey,
+      carryoverSourceName: baseFixedName(g),
+      observaciones: `Deuda arrastrada del gasto fijo ${baseFixedName(g)} de ${sourceMonthKey}`,
+    }));
+}
+
 function mergeNextMonthFixedExpenses(baseRegular, carryovers, existingMonth) {
   const existingNonCarry = (existingMonth?.gastosFijos || []).filter((g) => !g.arrastradoDe);
   const base = existingMonth?.fixedCustomized && existingNonCarry.length ? existingNonCarry.map((g) => ({ ...g, id: uid() })) : baseRegular;
@@ -393,16 +412,20 @@ function applyCloseMonthCarryover(monthKey) {
   const nextKey = nextMonthKey(monthKey);
   const existingNext = state.months[nextKey] || { movimientos: [] };
   const baseRegular = cloneFixedExpenses(sourceMonth);
-  const carryovers = buildCarryoverFixedExpenses(monthKey, sourceMonth);
   state.months[nextKey] = {
     ...existingNext,
     fixedCustomized: !!existingNext.fixedCustomized,
     autoGenerated: true,
-    carryoverGenerated: true,
-    gastosFijos: mergeNextMonthFixedExpenses(baseRegular, carryovers, existingNext),
+    carryoverGenerated: false,
+    gastosFijos: mergeNextMonthFixedExpenses(baseRegular, [], existingNext),
     movimientos: Array.isArray(existingNext.movimientos) ? existingNext.movimientos : [],
   };
-  return nextKey;
+
+  const newCarryoverCommitments = buildCarryoverCommitments(monthKey, sourceMonth);
+  const existingCommitments = (state.compromisos || []).filter((c) => c.carryoverSourceMonth !== monthKey);
+  state.compromisos = [...newCarryoverCommitments, ...existingCommitments];
+  sourceMonth.closedCarryoverToCommitments = true;
+  return { nextKey, carryoversCount: newCarryoverCommitments.length };
 }
 
 function sortFixedExpensesList(items) {
@@ -491,7 +514,8 @@ function findReferenceMonthForNewMonth(monthKey, sourceMonthKey = state.currentM
 function shouldResyncMonthFromPrevious(monthKey) {
   const current = state.months[monthKey];
   const prev = state.months[previousMonthKey(monthKey)];
-  if (!current || !prev || !hasMeaningfulFixedExpenses(prev)) return false;
+  if (!current || current.closedAt) return false;
+  if (!prev || !hasMeaningfulFixedExpenses(prev)) return false;
   if (current.fixedCustomized || current.carryoverGenerated) return false;
   if (!isUntouchedMonth(current) && !isLikelyCorruptedAutoMonth(current, prev)) return false;
   if (sameFixedExpenses(current, prev) && hasMeaningfulFixedExpenses(current)) return false;
@@ -976,7 +1000,7 @@ function renderPlata() {
           <div class="row">
             <div>
               <div class="title">${c.nombre}</div>
-              <div class="sub">${resume}</div>
+              <div class="sub">${resume}${c.observaciones ? ` · ${c.observaciones}` : ''}</div>
             </div>
             <div class="row-actions">
               <button class="secondary small" onclick="editCommitment('${c.id}')">Editar</button>
