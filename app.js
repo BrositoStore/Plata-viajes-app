@@ -1,6 +1,6 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v25';
-const STORAGE_KEYS = ['plata-viajes-pwa-v25','plata-viajes-pwa-v24','plata-viajes-pwa-v23','plata-viajes-pwa-v22','plata-viajes-pwa-v21','plata-viajes-pwa-v20','plata-viajes-pwa-v19','plata-viajes-pwa-v18','plata-viajes-pwa-v17','plata-viajes-pwa-v16','plata-viajes-pwa-v15','plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
-const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v25';
+const STORAGE_KEY = 'plata-viajes-pwa-v26';
+const STORAGE_KEYS = ['plata-viajes-pwa-v26','plata-viajes-pwa-v25','plata-viajes-pwa-v24','plata-viajes-pwa-v23','plata-viajes-pwa-v22','plata-viajes-pwa-v21','plata-viajes-pwa-v20','plata-viajes-pwa-v19','plata-viajes-pwa-v18','plata-viajes-pwa-v17','plata-viajes-pwa-v16','plata-viajes-pwa-v15','plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
+const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v26';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -54,7 +54,7 @@ function normalizeTrip(trip) {
   if (!trip) return trip;
   migrateTripToUnifiedPedidos(trip);
   ['pasajeros', 'pedidos'].forEach((section) => {
-    trip[section] = (trip[section] || []).map((item) => normalizeTripLine(item));
+    trip[section] = consolidateTripSection(section, (trip[section] || []).map((item) => normalizeTripLine(item)));
   });
   return trip;
 }
@@ -197,7 +197,11 @@ function migrateState(parsed) {
   parsed.pricing.minPedido = parseAmountInput(parsed.pricing.minPedido || DEFAULT_PRICING.minPedido);
   parsed.pricing.minPasajero = parseAmountInput(parsed.pricing.minPasajero || DEFAULT_PRICING.minPasajero);
   if (!parsed.maintenanceTypes) parsed.maintenanceTypes = [...DEFAULT_MAINTENANCE_TYPES];
-  if (!parsed.quickActions || !Array.isArray(parsed.quickActions) || !parsed.quickActions.length) parsed.quickActions = ['Combustible', 'Peajes', 'Cochera'];
+  if (!parsed.quickActions || !Array.isArray(parsed.quickActions) || !parsed.quickActions.length) {
+    parsed.quickActions = ['Combustible', 'Peajes', 'Cochera'];
+  } else {
+    parsed.quickActions = parsed.quickActions.map((q) => typeof q === 'string' ? q : String(q?.label || q?.name || '').trim()).filter(Boolean);
+  }
   if (!parsed.vehicles || !Array.isArray(parsed.vehicles) || !parsed.vehicles.length) {
     parsed.vehicles = DEFAULT_VEHICLES.map((v) => ({ ...v }));
   } else {
@@ -398,6 +402,7 @@ function addQuickExpense(category, defaultDetail='') {
   const detalle = (prompt('Detalle (opcional):', defaultDetail) || defaultDetail || '').trim();
   currentTrip().gastos.unshift({ id: uid(), categoria: category, detalle, monto });
   logAction('viaje', `Se agregó gasto rápido ${category} por ${money(monto)}`);
+  saveState();
   setTab('viajes');
   render();
   alert(`Listo: ${category} agregado por ${money(monto)}.`);
@@ -461,40 +466,7 @@ function detailTextForSection(section, detalle, cantidad) {
   return detalle;
 }
 
-function mergeTripLineOrInsert(section, newItem) {
-  const list = currentTrip()[section] || [];
-  const match = list.find((x) => norm(x.cliente) && norm(x.cliente) === norm(newItem.cliente));
-  if (!match) {
-    if (section === 'pedidos') newItem.detalle = labelPedidoDetail(newItem);
-    list.unshift(newItem);
-    currentTrip()[section] = list;
-    return newItem;
-  }
-  normalizeTripLine(match);
-  normalizeTripLine(newItem);
-  match.cobro = Number(match.cobro || 0) + Number(newItem.cobro || 0);
-  match.cobradoActual = Number(match.cobradoActual || 0) + Number(newItem.cobradoActual || 0);
-  match.pagos = [...(newItem.pagos || []), ...(match.pagos || [])];
-  if (section === 'pedidos') {
-    match.cantidad = deriveItemUnits('pedidos', match) + deriveItemUnits('pedidos', newItem);
-    match.detalle = mergeDetailText(match.detalle, newItem.detalle);
-    match.detalle = labelPedidoDetail(match);
-  } else {
-    match.unidades = deriveItemUnits(section, match) + deriveItemUnits(section, newItem);
-    match.detalle = mergeDetailText(match.detalle, newItem.detalle);
-  }
-  normalizeTripLine(match);
-  return match;
-}
-
-function setAssistantFeedback(message, type = 'info') {
-  const el = document.getElementById('assistantFeedback');
-  if (!el) return;
-  el.textContent = message || '';
-  el.dataset.type = type;
-}
-
-function normalizeAssistantClientName(name) {
+function canonicalClientName(name) {
   const raw = String(name || '').trim();
   if (!raw) return '';
   const pools = [
@@ -507,6 +479,64 @@ function normalizeAssistantClientName(name) {
   if (exact) return exact;
   const contains = pools.find((n) => norm(n).includes(norm(raw)) || norm(raw).includes(norm(n)));
   return contains || raw;
+}
+
+function mergeTripLines(section, target, incoming) {
+  normalizeTripLine(target);
+  normalizeTripLine(incoming);
+  target.cobro = Number(target.cobro || 0) + Number(incoming.cobro || 0);
+  target.cobradoActual = Number(target.cobradoActual || 0) + Number(incoming.cobradoActual || 0);
+  target.pagos = [...(incoming.pagos || []), ...(target.pagos || [])];
+  if (section === 'pedidos') {
+    target.cantidad = deriveItemUnits('pedidos', target) + deriveItemUnits('pedidos', incoming);
+    target.detalle = mergeDetailText(target.detalle, incoming.detalle);
+    target.detalle = labelPedidoDetail(target);
+  } else {
+    target.unidades = deriveItemUnits(section, target) + deriveItemUnits(section, incoming);
+    target.detalle = mergeDetailText(target.detalle, incoming.detalle);
+  }
+  return normalizeTripLine(target);
+}
+
+function consolidateTripSection(section, list) {
+  const merged = [];
+  (list || []).forEach((raw) => {
+    const item = normalizeTripLine({ ...raw });
+    item.cliente = canonicalClientName(item.cliente);
+    if (!item.cliente) {
+      if (section === 'pedidos') item.detalle = labelPedidoDetail(item);
+      merged.push(item);
+      return;
+    }
+    const found = merged.find((x) => norm(x.cliente) === norm(item.cliente));
+    if (!found) {
+      if (section === 'pedidos') item.detalle = labelPedidoDetail(item);
+      merged.push(item);
+      return;
+    }
+    mergeTripLines(section, found, item);
+  });
+  return merged;
+}
+
+function mergeTripLineOrInsert(section, newItem) {
+  const trip = currentTrip();
+  newItem = normalizeTripLine({ ...newItem, cliente: canonicalClientName(newItem.cliente) });
+  if (section === 'pedidos') newItem.detalle = labelPedidoDetail(newItem);
+  trip[section] = consolidateTripSection(section, [...(trip[section] || []), newItem]);
+  const exact = (trip[section] || []).find((x) => norm(x.cliente) === norm(newItem.cliente));
+  return exact || newItem;
+}
+
+function setAssistantFeedback(message, type = 'info') {
+  const el = document.getElementById('assistantFeedback');
+  if (!el) return;
+  el.textContent = message || '';
+  el.dataset.type = type;
+}
+
+function normalizeAssistantClientName(name) {
+  return canonicalClientName(name);
 }
 
 function ensureAssistantClient(clientName) {
@@ -603,12 +633,13 @@ function processAssistantCommand(rawText) {
       const cobro = parseAmountInput(subparts[2] || 0);
       const cobradoInicial = Math.max(0, Math.min(parseAmountInput(subparts[3] || 0), cobro));
       if (!cliente || !cobro) throw new Error('Pedido incompleto. Usá: pedido Nombre | detalle | total | cobrado');
-      currentTrip().pedidos.unshift(normalizeTripLine({
+      mergeTripLineOrInsert('pedidos', normalizeTripLine({
         id: uid(),
         cliente,
         detalle,
         cobro,
         cobradoActual: cobradoInicial,
+        cantidad: Math.max(1, extractFirstNumber(detalle) || 1),
         pagos: cobradoInicial > 0 ? [{ id: uid(), fecha: today(), monto: cobradoInicial, texto: cobradoInicial >= cobro ? 'Pago inicial completo' : 'Pago inicial parcial' }] : [],
       }));
       logAction('carga rápida', `Pedido rápido para ${cliente} por ${money(cobro)}`);
@@ -626,7 +657,7 @@ function processAssistantCommand(rawText) {
       const cobro = parseAmountInput(subparts[2] || 0);
       const cobradoInicial = Math.max(0, Math.min(parseAmountInput(subparts[3] || 0), cobro));
       if (!cliente || !cobro) throw new Error('Pasajero incompleto. Usá: pasajero Nombre | destino | total | cobrado');
-      currentTrip().pasajeros.unshift(normalizeTripLine({
+      mergeTripLineOrInsert('pasajeros', normalizeTripLine({
         id: uid(),
         cliente,
         detalle,
