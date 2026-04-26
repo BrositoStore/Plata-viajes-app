@@ -1,6 +1,6 @@
-const STORAGE_KEY = 'plata-viajes-pwa-v23';
-const STORAGE_KEYS = ['plata-viajes-pwa-v23','plata-viajes-pwa-v22','plata-viajes-pwa-v21','plata-viajes-pwa-v20','plata-viajes-pwa-v19','plata-viajes-pwa-v18','plata-viajes-pwa-v17','plata-viajes-pwa-v16','plata-viajes-pwa-v15','plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
-const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v23';
+const STORAGE_KEY = 'plata-viajes-pwa-v25';
+const STORAGE_KEYS = ['plata-viajes-pwa-v25','plata-viajes-pwa-v24','plata-viajes-pwa-v23','plata-viajes-pwa-v22','plata-viajes-pwa-v21','plata-viajes-pwa-v20','plata-viajes-pwa-v19','plata-viajes-pwa-v18','plata-viajes-pwa-v17','plata-viajes-pwa-v16','plata-viajes-pwa-v15','plata-viajes-pwa-v14','plata-viajes-pwa-v13','plata-viajes-pwa-v12','plata-viajes-pwa-v11','plata-viajes-pwa-v10','plata-viajes-pwa-v9','plata-viajes-pwa-v8','plata-viajes-pwa-v7','plata-viajes-pwa-v6','plata-viajes-pwa-v5','plata-viajes-pwa-v4'];
+const SNAPSHOT_KEY = 'plata-viajes-pwa-snapshots-v25';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -91,6 +91,22 @@ const DEFAULT_PRICING = {
   minPasajero: 22000,
 };
 
+function pricingState() {
+  const pricing = state.pricing || (state.pricing = { ...DEFAULT_PRICING });
+  const minPedido = parseAmountInput(pricing.minPedido || 0) || DEFAULT_PRICING.minPedido;
+  const minPasajero = parseAmountInput(pricing.minPasajero || 0) || DEFAULT_PRICING.minPasajero;
+  pricing.minPedido = minPedido;
+  pricing.minPasajero = minPasajero;
+  return pricing;
+}
+
+function setPricingFeedback(message, type = 'success') {
+  const el = document.getElementById('pricingFeedback');
+  if (!el) return;
+  el.textContent = message || '';
+  el.dataset.type = type;
+}
+
 function extractFirstNumber(text) {
   const match = String(text || '').match(/(\d+)/);
   return match ? Math.max(1, Number(match[1])) : 0;
@@ -99,12 +115,13 @@ function extractFirstNumber(text) {
 function inferTripLineTotal(section, options = {}) {
   const explicit = parseAmountInput(options.rawCobro || 0);
   if (explicit) return explicit;
-  const pricing = state?.pricing || DEFAULT_PRICING;
+  const pricing = pricingState();
   if (section === 'pedidos') {
     const qty = Math.max(1, Number(options.cantidad || 0) || extractFirstNumber(options.detalle));
-    return qty * Number(pricing.minPedido || DEFAULT_PRICING.minPedido || 0);
+    const base = parseAmountInput(pricing.minPedido || 0) || DEFAULT_PRICING.minPedido;
+    return qty * base;
   }
-  return Number(pricing.minPasajero || DEFAULT_PRICING.minPasajero || 0);
+  return parseAmountInput(pricing.minPasajero || 0) || DEFAULT_PRICING.minPasajero;
 }
 
 function inferTripLineCollected(rawCobrado, total) {
@@ -140,6 +157,7 @@ const initialState = () => {
     compromisos: [],
     tripExpenseCategories: ['Combustible', 'Peajes', 'Comida', 'Cadetería', 'Cochera', 'Repuestos', 'Otros'],
     pricing: { ...DEFAULT_PRICING },
+    quickActions: ['Combustible', 'Peajes', 'Cochera'],
     maintenanceTypes: [...DEFAULT_MAINTENANCE_TYPES],
     vehicles: DEFAULT_VEHICLES.map((v) => ({ ...v })),
     currentMaintenanceVehicleId: DEFAULT_VEHICLES[0].id,
@@ -179,6 +197,7 @@ function migrateState(parsed) {
   parsed.pricing.minPedido = parseAmountInput(parsed.pricing.minPedido || DEFAULT_PRICING.minPedido);
   parsed.pricing.minPasajero = parseAmountInput(parsed.pricing.minPasajero || DEFAULT_PRICING.minPasajero);
   if (!parsed.maintenanceTypes) parsed.maintenanceTypes = [...DEFAULT_MAINTENANCE_TYPES];
+  if (!parsed.quickActions || !Array.isArray(parsed.quickActions) || !parsed.quickActions.length) parsed.quickActions = ['Combustible', 'Peajes', 'Cochera'];
   if (!parsed.vehicles || !Array.isArray(parsed.vehicles) || !parsed.vehicles.length) {
     parsed.vehicles = DEFAULT_VEHICLES.map((v) => ({ ...v }));
   } else {
@@ -375,13 +394,98 @@ function addQuickExpense(category, defaultDetail='') {
   const amount = prompt(`Monto para ${category}:`, '');
   if (amount === null) return;
   const monto = parseAmountInput(amount || 0);
-  if (!monto) return;
-  const detalle = prompt('Detalle (opcional):', defaultDetail) || defaultDetail;
+  if (!monto) return alert('Cargá un monto válido.');
+  const detalle = (prompt('Detalle (opcional):', defaultDetail) || defaultDetail || '').trim();
   currentTrip().gastos.unshift({ id: uid(), categoria: category, detalle, monto });
   logAction('viaje', `Se agregó gasto rápido ${category} por ${money(monto)}`);
+  setTab('viajes');
   render();
+  alert(`Listo: ${category} agregado por ${money(monto)}.`);
 }
 
+
+function addQuickActionFromInput(ev) {
+  if (ev) ev.preventDefault();
+  const input = document.getElementById('quickActionName');
+  const val = String(input?.value || '').trim();
+  if (!val) return;
+  if (!(state.tripExpenseCategories || []).includes(val)) state.tripExpenseCategories.push(val);
+  if (!(state.quickActions || []).some((x) => norm(x) === norm(val))) {
+    state.quickActions.push(val);
+    logAction('inicio', `Se agregó acceso rápido ${val}`);
+  }
+  if (input) input.value = '';
+  renderDashboard();
+  renderViajes();
+  saveState();
+}
+
+function removeQuickAction(name) {
+  state.quickActions = (state.quickActions || []).filter((x) => norm(x) !== norm(name));
+  logAction('inicio', `Se eliminó acceso rápido ${name}`);
+  renderDashboard();
+  saveState();
+}
+
+function mergeDetailText(existing, incoming) {
+  const pieces = [];
+  [existing, incoming].forEach((text) => {
+    String(text || '').split('|').map((s) => s.trim()).filter(Boolean).forEach((s) => {
+      if (!pieces.some((p) => norm(p) === norm(s))) pieces.push(s);
+    });
+  });
+  return pieces.join(' | ');
+}
+
+function deriveItemUnits(section, item) {
+  if (!item) return 1;
+  if (section === 'pedidos') return Math.max(1, Number(item.cantidad || 0) || extractFirstNumber(item.detalle) || 1);
+  return Math.max(1, Number(item.unidades || 0) || 1);
+}
+
+function labelPedidoDetail(item) {
+  const qty = Math.max(1, Number(item.cantidad || 0) || extractFirstNumber(item.detalle) || 1);
+  const extras = String(item.detalle || '')
+    .split('|')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s) => !/^\d+\s+pedido/.test(s.toLowerCase()));
+  return [qty + ' pedido' + (qty > 1 ? 's' : ''), ...extras].join(' | ');
+}
+
+function detailTextForSection(section, detalle, cantidad) {
+  if (section === 'pedidos') {
+    const qty = Math.max(1, Number(cantidad || 0) || extractFirstNumber(detalle) || 1);
+    return detalle || `${qty} pedido${qty > 1 ? 's' : ''}`;
+  }
+  return detalle;
+}
+
+function mergeTripLineOrInsert(section, newItem) {
+  const list = currentTrip()[section] || [];
+  const match = list.find((x) => norm(x.cliente) && norm(x.cliente) === norm(newItem.cliente));
+  if (!match) {
+    if (section === 'pedidos') newItem.detalle = labelPedidoDetail(newItem);
+    list.unshift(newItem);
+    currentTrip()[section] = list;
+    return newItem;
+  }
+  normalizeTripLine(match);
+  normalizeTripLine(newItem);
+  match.cobro = Number(match.cobro || 0) + Number(newItem.cobro || 0);
+  match.cobradoActual = Number(match.cobradoActual || 0) + Number(newItem.cobradoActual || 0);
+  match.pagos = [...(newItem.pagos || []), ...(match.pagos || [])];
+  if (section === 'pedidos') {
+    match.cantidad = deriveItemUnits('pedidos', match) + deriveItemUnits('pedidos', newItem);
+    match.detalle = mergeDetailText(match.detalle, newItem.detalle);
+    match.detalle = labelPedidoDetail(match);
+  } else {
+    match.unidades = deriveItemUnits(section, match) + deriveItemUnits(section, newItem);
+    match.detalle = mergeDetailText(match.detalle, newItem.detalle);
+  }
+  normalizeTripLine(match);
+  return match;
+}
 
 function setAssistantFeedback(message, type = 'info') {
   const el = document.getElementById('assistantFeedback');
@@ -1236,8 +1340,9 @@ function buildTripClientSummary(trip) {
           detalles: [],
         };
       }
-      groups[name].totalItems += 1;
-      groups[name].counts[label] += 1;
+      const units = label === 'Pedidos' ? deriveItemUnits('pedidos', item) : deriveItemUnits('pasajeros', item);
+      groups[name].totalItems += units;
+      groups[name].counts[label] += units;
       groups[name].facturado += amounts.total;
       groups[name].cobrado += amounts.cobrado;
       groups[name].pendiente += amounts.pendiente;
@@ -1334,6 +1439,15 @@ function renderDashboard() {
   if (tripInfo) {
     const groups = buildTripClientSummary(trip).slice(0, 5);
     tripInfo.innerHTML = groups.length ? groups.map((g) => `<div class="alert-item info"><strong>${escapeHtml(g.cliente)}</strong><div class="audit-meta">${g.totalItems} ítems · Cobrado ${money(g.cobrado)} · Pendiente ${money(g.pendiente)}</div></div>`).join('') : '<div class="empty">No hay clientes cargados en el viaje actual.</div>';
+  }
+  const quickEditable = document.getElementById('quickActionsEditable');
+  if (quickEditable) {
+    const quicks = (state.quickActions || []).filter(Boolean);
+    quickEditable.innerHTML = quicks.length ? quicks.map((name) => {
+      const escapedName = escapeHtml(name);
+      const safeName = name.replace(/'/g, "\'");
+      return `<div class="quick-chip"><button type="button" class="secondary" onclick="addQuickExpense('${safeName}')">${escapedName}</button><button type="button" class="chip-remove" onclick="removeQuickAction('${safeName}')">×</button></div>`;
+    }).join('') : '<div class="empty">Todavía no cargaste accesos rápidos.</div>';
   }
   const closuresEl = document.getElementById('monthClosuresList');
   if (closuresEl) closuresEl.innerHTML = closures.length ? closures.map((c) => `<div class="closure-item"><div><strong>${c.monthKey}</strong></div><div class="closure-meta">Cerrado ${new Date(c.closedAt).toLocaleString('es-AR')} · Caja ${money(c.balanceCajaMes)} · Viajes ${c.viajes}</div></div>`).join('') : '<div class="empty">Todavía no cerraste meses.</div>';
@@ -1657,10 +1771,11 @@ function renderViajes() {
   document.getElementById('tripNotes').value = trip.notas || '';
   fillClientDatalists();
   fillExpenseCategories();
+  const pricing = pricingState();
   const minPedidoInput = document.getElementById('minPedidoInput');
   const minPasajeroInput = document.getElementById('minPasajeroInput');
-  if (minPedidoInput) minPedidoInput.value = Math.round((state.pricing?.minPedido || DEFAULT_PRICING.minPedido) / 1000);
-  if (minPasajeroInput) minPasajeroInput.value = Math.round((state.pricing?.minPasajero || DEFAULT_PRICING.minPasajero) / 1000);
+  if (minPedidoInput && document.activeElement !== minPedidoInput) minPedidoInput.value = Math.round(pricing.minPedido / 1000);
+  if (minPasajeroInput && document.activeElement !== minPasajeroInput) minPasajeroInput.value = Math.round(pricing.minPasajero / 1000);
   const expressCategory = document.getElementById('expressCategory');
   if (expressCategory) expressCategory.innerHTML = (state.tripExpenseCategories || []).map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
   const expressVehicle = document.getElementById('expressVehicle');
@@ -1672,6 +1787,7 @@ function renderViajes() {
   if (expressMaintenanceType) expressMaintenanceType.innerHTML = (state.maintenanceTypes || DEFAULT_MAINTENANCE_TYPES).map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
   const expressDate = document.getElementById('expressDate');
   if (expressDate && !expressDate.value) expressDate.value = today();
+  if (!document.getElementById('pricingFeedback')?.textContent) setPricingFeedback('');
   updateExpressModeUI();
 
   const tripSummary = getTripMetrics(trip);
@@ -1789,7 +1905,7 @@ function renderTripSection(sectionKey, targetId) {
       <div class="row">
         <div>
           <div class="title">${item.cliente || 'Sin cliente'}</div>
-          <div class="sub">${item.detalle || 'Sin detalle'}</div>
+          <div class="sub">${item.detalle || 'Sin detalle'}${sectionKey === 'pedidos' ? ` · ${deriveItemUnits('pedidos', item)} pedidos` : (deriveItemUnits('pasajeros', item) > 1 ? ` · ${deriveItemUnits('pasajeros', item)} registros` : '')}</div>
           <div class="meta">${statusBadge(amounts.estado)} · Cobrado ${money(amounts.cobrado)} / Pendiente ${money(amounts.pendiente)}</div>
           ${paymentsHtml}
         </div>
@@ -2120,18 +2236,21 @@ function addTripLineFromForm(ev) {
   const rawCobro = String(fd.get('cobro') || '').trim();
   const rawCobrado = String(fd.get('cobradoInicial') || '').trim();
   if (!cliente && !detalle) return;
+  pricingState();
   const cobro = inferTripLineTotal(section, { rawCobro, detalle, cantidad });
-  if (!cobro) return alert('No pude calcular el total. Cargá un monto o definí un valor base.');
+  if (!cobro) return alert(`No pude calcular el total. Revisá los valores base o cargá un monto manual.`);
   const cobradoInicial = inferTripLineCollected(rawCobrado, cobro);
   const item = normalizeTripLine({
     id: uid(),
     cliente,
-    detalle: section === 'pedidos' && cantidad > 0 && !detalle ? `${cantidad} pedido${cantidad > 1 ? 's' : ''}` : detalle,
+    detalle: detailTextForSection(section, detalle, cantidad),
+    cantidad: section === 'pedidos' ? Math.max(1, cantidad || extractFirstNumber(detalle) || 1) : undefined,
+    unidades: section === 'pasajeros' ? 1 : undefined,
     cobro,
     cobradoActual: cobradoInicial,
     pagos: buildInitialPayments(cobro, cobradoInicial),
   });
-  currentTrip()[section].unshift(item);
+  mergeTripLineOrInsert(section, item);
   if (item.cliente && !(state.clientesFrecuentes || []).some((c) => norm(c.nombre) === norm(item.cliente))) {
     state.clientesFrecuentes.unshift({ id: uid(), nombre: item.cliente, telefono: '', notas: '' });
   }
@@ -2144,6 +2263,8 @@ function editTripLine(section, id) {
   normalizeTripLine(item);
   const cliente = prompt('Cliente:', item.cliente || '');
   if (cliente === null) return;
+  const cantidad = section === 'pedidos' ? prompt('Cantidad de pedidos:', deriveItemUnits('pedidos', item)) : null;
+  if (section === 'pedidos' && cantidad === null) return;
   const detalle = prompt('Detalle:', item.detalle || '');
   if (detalle === null) return;
   const cobro = prompt('Total a cobrar:', item.cobro);
@@ -2151,10 +2272,12 @@ function editTripLine(section, id) {
   const cobradoActual = prompt('Ya cobrado en este viaje:', item.cobradoActual || 0);
   if (cobradoActual === null) return;
   item.cliente = cliente.trim();
-  item.detalle = detalle.trim();
+  if (section === 'pedidos') item.cantidad = Math.max(1, Number(cantidad || 0) || extractFirstNumber(detalle) || 1);
+  item.detalle = section === 'pedidos' ? (detalle.trim() || labelPedidoDetail(item)) : detalle.trim();
   item.cobro = parseAmountInput(cobro || 0);
   item.cobradoActual = Math.max(0, Math.min(parseAmountInput(cobradoActual || 0), Number(item.cobro || 0)));
   item.pagado = item.cobradoActual >= item.cobro;
+  if (section === 'pedidos') item.detalle = labelPedidoDetail(item);
   if (item.cobradoActual > item.cobro) item.cobradoActual = item.cobro;
   if (item.cliente && !(state.clientesFrecuentes || []).some((c) => norm(c.nombre) === norm(item.cliente))) {
     state.clientesFrecuentes.unshift({ id: uid(), nombre: item.cliente, telefono: '', notas: '' });
@@ -2465,15 +2588,19 @@ function importData(file) {
   reader.readAsText(file);
 }
 
-function savePricingSettings() {
+function savePricingSettings(showFeedback = true) {
   const pedidoInput = document.getElementById('minPedidoInput');
   const pasajeroInput = document.getElementById('minPasajeroInput');
   if (!pedidoInput || !pasajeroInput) return;
-  state.pricing = state.pricing || { ...DEFAULT_PRICING };
-  state.pricing.minPedido = parseAmountInput(pedidoInput.value || state.pricing.minPedido || DEFAULT_PRICING.minPedido);
-  state.pricing.minPasajero = parseAmountInput(pasajeroInput.value || state.pricing.minPasajero || DEFAULT_PRICING.minPasajero);
-  logAction('viaje', 'Se actualizaron los valores base de viaje');
-  renderViajes();
+  const current = pricingState();
+  const minPedido = parseAmountInput(pedidoInput.value || current.minPedido || DEFAULT_PRICING.minPedido) || current.minPedido || DEFAULT_PRICING.minPedido;
+  const minPasajero = parseAmountInput(pasajeroInput.value || current.minPasajero || DEFAULT_PRICING.minPasajero) || current.minPasajero || DEFAULT_PRICING.minPasajero;
+  state.pricing = { minPedido, minPasajero };
+  if (pedidoInput) pedidoInput.value = Math.round(minPedido / 1000);
+  if (pasajeroInput) pasajeroInput.value = Math.round(minPasajero / 1000);
+  logAction('viaje', `Se actualizaron valores base: pedido ${money(minPedido)} · pasajero ${money(minPasajero)}`);
+  if (showFeedback) setPricingFeedback(`Guardado: pedido ${money(minPedido)} · pasajero ${money(minPasajero)}`, 'success');
+  render();
 }
 
 function updateExpressModeUI() {
@@ -2485,12 +2612,12 @@ function updateExpressModeUI() {
   if (mode === 'pedido') {
     ['expressClientWrap','expressQtyWrap','expressDetailWrap','expressTotalWrap','expressPaidWrap'].forEach((id) => document.getElementById(id)?.classList.remove('hidden'));
     document.getElementById('expressTotalLabel').textContent = 'Total a cobrar';
-    if (hint) hint.textContent = `Pedido: si dejás el total vacío, usa cantidad × mínimo por pedido (${money(state.pricing?.minPedido || DEFAULT_PRICING.minPedido)}). Si dejás cobrado vacío, lo toma como cobrado completo.`;
+    if (hint) hint.textContent = `Pedido: si dejás el total vacío, usa cantidad × mínimo por pedido (${money(pricingState().minPedido)}). Si dejás cobrado vacío, lo toma como cobrado completo.`;
     if (title) title.textContent = 'Agregar pedido';
   } else if (mode === 'pasajero') {
     ['expressClientWrap','expressDetailWrap','expressTotalWrap','expressPaidWrap'].forEach((id) => document.getElementById(id)?.classList.remove('hidden'));
     document.getElementById('expressTotalLabel').textContent = 'Total a cobrar';
-    if (hint) hint.textContent = `Pasajero: si dejás el total vacío, usa el mínimo de pasajero (${money(state.pricing?.minPasajero || DEFAULT_PRICING.minPasajero)}). Si dejás cobrado vacío, lo toma como cobrado completo.`;
+    if (hint) hint.textContent = `Pasajero: si dejás el total vacío, usa el mínimo de pasajero (${money(pricingState().minPasajero)}). Si dejás cobrado vacío, lo toma como cobrado completo.`;
     if (title) title.textContent = 'Agregar pasajero';
   } else if (mode === 'pago') {
     ['expressClientWrap','expressTotalWrap'].forEach((id) => document.getElementById(id)?.classList.remove('hidden'));
@@ -2521,6 +2648,7 @@ function submitExpressForm(ev) {
   const feedback = document.getElementById('expressFeedback');
   const say = (msg, type='info') => { if (feedback) { feedback.textContent = msg; feedback.dataset.type = type; } };
   try {
+    pricingState();
     if (mode === 'pedido' || mode === 'pasajero') {
       const section = mode === 'pedido' ? 'pedidos' : 'pasajeros';
       const cliente = ensureAssistantClient(String(fd.get('cliente') || '').trim());
@@ -2578,7 +2706,8 @@ function submitExpressForm(ev) {
     ev.target.reset();
     const modeEl = document.getElementById('expressMode');
     if (modeEl) modeEl.value = mode;
-    updateExpressModeUI();
+    if (!document.getElementById('pricingFeedback')?.textContent) setPricingFeedback('');
+  updateExpressModeUI();
     render();
   } catch (err) {
     say(err.message || 'No pude procesar la carga exprés.', 'error');
@@ -2687,12 +2816,8 @@ function wireEvents() {
   if (copyMonthDashboard) copyMonthDashboard.addEventListener('click', copyMonthTripSummary);
   const duplicateLastTripBtn = document.getElementById('duplicateLastTripBtn');
   if (duplicateLastTripBtn) duplicateLastTripBtn.addEventListener('click', duplicateLastTrip);
-  const quickFuelBtn = document.getElementById('quickFuelBtn');
-  if (quickFuelBtn) quickFuelBtn.addEventListener('click', () => addQuickExpense('Combustible'));
-  const quickTollBtn = document.getElementById('quickTollBtn');
-  if (quickTollBtn) quickTollBtn.addEventListener('click', () => addQuickExpense('Peajes'));
-  const quickGarageBtn = document.getElementById('quickGarageBtn');
-  if (quickGarageBtn) quickGarageBtn.addEventListener('click', () => addQuickExpense('Cochera'));
+  const quickActionForm = document.getElementById('quickActionForm');
+  if (quickActionForm) quickActionForm.addEventListener('submit', addQuickActionFromInput);
 
   document.getElementById('clientForm').addEventListener('submit', addClientFromForm);
   document.getElementById('clientSearch').addEventListener('input', render);
@@ -2700,7 +2825,13 @@ function wireEvents() {
   if (debtorSearch) debtorSearch.addEventListener('input', render);
   document.getElementById('manualDebtorForm').addEventListener('submit', addManualDebtorFromForm);
   const savePricingBtn = document.getElementById('savePricingBtn');
-  if (savePricingBtn) savePricingBtn.addEventListener('click', savePricingSettings);
+  if (savePricingBtn) savePricingBtn.addEventListener('click', () => savePricingSettings(true));
+  ['minPedidoInput','minPasajeroInput'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => savePricingSettings(false));
+    el.addEventListener('blur', () => savePricingSettings(false));
+  });
   const expressMode = document.getElementById('expressMode');
   if (expressMode) expressMode.addEventListener('change', updateExpressModeUI);
   const expressForm = document.getElementById('expressForm');
@@ -2741,6 +2872,7 @@ window.copyTripHistorySummary = copyTripHistorySummary;
 window.removeTripHistory = removeTripHistory;
 window.viewClientProfile = viewClientProfile;
 window.addQuickExpense = addQuickExpense;
+window.removeQuickAction = removeQuickAction;
 window.closeCurrentMonth = closeCurrentMonth;
 window.restoreLatestSnapshot = restoreLatestSnapshot;
 window.exportCsv = exportCsv;

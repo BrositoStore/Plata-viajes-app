@@ -798,3 +798,10 @@ h1 {
   .mode-pills { width:100%; }
   .pricing-form { grid-template-columns: 1fr; }
 }
+
+
+#pricingFeedback{font-weight:600;}
+#pricingFeedback[data-type="success"]{color:#0f766e;}
+#pricingFeedback[data-type="error"]{color:#b91c1c;}
+
+.quick-chip{display:inline-flex;align-items:center;gap:6px;margin:4px 6px 4px 0}.quick-chip .secondary{padding-right:14px}.chip-remove{border:none;background:#fee2e2;color:#991b1b;border-radius:999px;width:24px;height:24px;cursor:pointer;font-weight:700}.quick-action-form input{min-width:260px}.fixed-tools{margin-bottom:8px}

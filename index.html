@@ -60,19 +60,106 @@
               <div class="card inner">
                 <div class="card-head"><h3>Accesos rápidos</h3></div>
                 <div class="card-body">
-                  <div class="quick-actions">
-                    <button id="duplicateLastTripBtn" class="secondary">Duplicar último viaje</button>
-                    <button id="quickFuelBtn" class="secondary">Combustible rápido</button>
-                    <button id="quickTollBtn" class="secondary">Peaje rápido</button>
-                    <button id="quickGarageBtn" class="secondary">Cochera rápida</button>
-                    <button id="copyMonthSummaryDashboardBtn" class="secondary">Copiar resumen mes</button>
+                  <div class="quick-actions fixed-tools">
+                    <button id="duplicateLastTripBtn" type="button" class="secondary">Duplicar último viaje</button>
+                    <button id="copyMonthSummaryDashboardBtn" type="button" class="secondary">Copiar resumen mes</button>
                   </div>
+                  <div class="subtle small-bottom">Accesos rápidos editables. Poné los tuyos y borrá los que no te sirvan.</div>
+                  <form id="quickActionForm" class="inline-row quick-action-form">
+                    <input id="quickActionName" placeholder="Nuevo acceso rápido (ej: GNC, Cadetería, Peaje)" />
+                    <button type="submit" class="secondary">Agregar acceso</button>
+                  </form>
+                  <div id="quickActionsEditable" class="quick-actions top-gap"></div>
                   <div id="dashboardTripInfo" class="stack top-gap"></div>
                 </div>
               </div>
             </div>
           </div>
         </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Carga exprés guiada</h2>
+            <span class="pill">rápida e inteligente</span>
+          </div>
+          <div class="card-body stack">
+            <div class="assistant-help">En vez de comandos rígidos, elegís qué querés cargar y completás solo lo necesario. La app infiere el resto con tus valores base.</div>
+            <form id="expressForm" class="stack">
+              <div class="express-top-row">
+                <label>
+                  <span>Modo</span>
+                  <select id="expressMode" name="mode">
+                    <option value="pedido">Pedido</option>
+                    <option value="pasajero">Pasajero</option>
+                    <option value="pago">Pago</option>
+                    <option value="gasto">Gasto de viaje</option>
+                    <option value="movimiento">Movimiento del mes</option>
+                    <option value="mantenimiento">Mantenimiento</option>
+                  </select>
+                </label>
+                <div class="mode-pills">
+                  <span class="chip">menos tipeo</span>
+                  <span class="chip">usa valores base</span>
+                  <span class="chip">ideal para celular</span>
+                </div>
+              </div>
+              <div class="grid-form express-grid">
+                <label id="expressClientWrap">
+                  <span>Cliente</span>
+                  <input id="expressClient" name="cliente" list="clientListExpress" placeholder="Cliente" />
+                  <datalist id="clientListExpress"></datalist>
+                </label>
+                <label id="expressQtyWrap" class="hidden">
+                  <span>Cantidad</span>
+                  <input id="expressQty" name="cantidad" type="number" placeholder="Cant. pedidos" />
+                </label>
+                <label id="expressDetailWrap">
+                  <span>Detalle / destino / nota</span>
+                  <input id="expressDetail" name="detalle" placeholder="Detalle" />
+                </label>
+                <label id="expressTotalWrap">
+                  <span id="expressTotalLabel">Total</span>
+                  <input id="expressTotal" name="total" type="number" placeholder="Monto" />
+                </label>
+                <label id="expressPaidWrap">
+                  <span>Cobrado ahora</span>
+                  <input id="expressPaid" name="cobrado" type="number" placeholder="Si queda vacío, toma pago total" />
+                </label>
+                <label id="expressCategoryWrap" class="hidden">
+                  <span>Categoría</span>
+                  <select id="expressCategory" name="categoria"></select>
+                </label>
+                <label id="expressMoveTypeWrap" class="hidden">
+                  <span>Tipo de movimiento</span>
+                  <select id="expressMoveType" name="moveType">
+                    <option value="gasto">Gasto</option>
+                    <option value="ingreso">Ingreso</option>
+                  </select>
+                </label>
+                <label id="expressVehicleWrap" class="hidden">
+                  <span>Vehículo</span>
+                  <select id="expressVehicle" name="vehicleId"></select>
+                </label>
+                <label id="expressMaintTypeWrap" class="hidden">
+                  <span>Tipo de mantenimiento</span>
+                  <select id="expressMaintenanceType" name="maintenanceType"></select>
+                </label>
+                <label id="expressDateWrap" class="hidden">
+                  <span>Fecha</span>
+                  <input id="expressDate" name="fecha" type="date" />
+                </label>
+                <label id="expressKmWrap" class="hidden">
+                  <span>Kilometraje</span>
+                  <input id="expressKm" name="km" type="number" placeholder="Km" />
+                </label>
+              </div>
+              <div class="inline-row express-actions">
+                <div id="expressHint" class="field-hint"></div>
+                <button id="expressSubmitBtn" type="submit">Agregar pedido</button>
+              </div>
+            </form>
+            <div id="expressFeedback" class="assistant-feedback"></div>
+          
 
         <div class="grid-2">
           <div class="card">
@@ -162,89 +249,7 @@
 
         
 
-        <div class="card">
-          <div class="card-head">
-            <h2>Carga exprés guiada</h2>
-            <span class="pill">rápida e inteligente</span>
-          </div>
-          <div class="card-body stack">
-            <div class="assistant-help">En vez de comandos rígidos, elegís qué querés cargar y completás solo lo necesario. La app infiere el resto con tus valores base.</div>
-            <form id="expressForm" class="stack">
-              <div class="express-top-row">
-                <label>
-                  <span>Modo</span>
-                  <select id="expressMode" name="mode">
-                    <option value="pedido">Pedido</option>
-                    <option value="pasajero">Pasajero</option>
-                    <option value="pago">Pago</option>
-                    <option value="gasto">Gasto de viaje</option>
-                    <option value="movimiento">Movimiento del mes</option>
-                    <option value="mantenimiento">Mantenimiento</option>
-                  </select>
-                </label>
-                <div class="mode-pills">
-                  <span class="chip">menos tipeo</span>
-                  <span class="chip">usa valores base</span>
-                  <span class="chip">ideal para celular</span>
-                </div>
-              </div>
-              <div class="grid-form express-grid">
-                <label id="expressClientWrap">
-                  <span>Cliente</span>
-                  <input id="expressClient" name="cliente" list="clientListExpress" placeholder="Cliente" />
-                  <datalist id="clientListExpress"></datalist>
-                </label>
-                <label id="expressQtyWrap" class="hidden">
-                  <span>Cantidad</span>
-                  <input id="expressQty" name="cantidad" type="number" placeholder="Cant. pedidos" />
-                </label>
-                <label id="expressDetailWrap">
-                  <span>Detalle / destino / nota</span>
-                  <input id="expressDetail" name="detalle" placeholder="Detalle" />
-                </label>
-                <label id="expressTotalWrap">
-                  <span id="expressTotalLabel">Total</span>
-                  <input id="expressTotal" name="total" type="number" placeholder="Monto" />
-                </label>
-                <label id="expressPaidWrap">
-                  <span>Cobrado ahora</span>
-                  <input id="expressPaid" name="cobrado" type="number" placeholder="Si queda vacío, toma pago total" />
-                </label>
-                <label id="expressCategoryWrap" class="hidden">
-                  <span>Categoría</span>
-                  <select id="expressCategory" name="categoria"></select>
-                </label>
-                <label id="expressMoveTypeWrap" class="hidden">
-                  <span>Tipo de movimiento</span>
-                  <select id="expressMoveType" name="moveType">
-                    <option value="gasto">Gasto</option>
-                    <option value="ingreso">Ingreso</option>
-                  </select>
-                </label>
-                <label id="expressVehicleWrap" class="hidden">
-                  <span>Vehículo</span>
-                  <select id="expressVehicle" name="vehicleId"></select>
-                </label>
-                <label id="expressMaintTypeWrap" class="hidden">
-                  <span>Tipo de mantenimiento</span>
-                  <select id="expressMaintenanceType" name="maintenanceType"></select>
-                </label>
-                <label id="expressDateWrap" class="hidden">
-                  <span>Fecha</span>
-                  <input id="expressDate" name="fecha" type="date" />
-                </label>
-                <label id="expressKmWrap" class="hidden">
-                  <span>Kilometraje</span>
-                  <input id="expressKm" name="km" type="number" placeholder="Km" />
-                </label>
-              </div>
-              <div class="inline-row express-actions">
-                <div id="expressHint" class="field-hint"></div>
-                <button id="expressSubmitBtn" type="submit">Agregar pedido</button>
-              </div>
-            </form>
-            <div id="expressFeedback" class="assistant-feedback"></div>
-          </div>
+        </div>
         </div>
 
         <div class="card">
@@ -282,6 +287,7 @@
                   </label>
                   <button id="savePricingBtn" type="button">Guardar valores base</button>
                 </form>
+                <div id="pricingFeedback" class="field-hint"></div>
                 <div class="field-hint">Si dejás el monto vacío al cargar un pedido o pasajero, la app usa estos valores base. En pedidos, si indicás cantidad, multiplica por el mínimo por pedido. Si dejás “cobrado ahora” vacío, lo toma como cobrado completo.</div>
               </div>
             </div>
